@@ -2,6 +2,8 @@
 
 Python simulation of two Uniswap constant-product pools and the arbitrage opportunity between them.
 
+**[▶ Live demo](https://jolikewe.github.io/uniswap-exchange/)**: drag trades along the x·y=k curve and replay the arbitrage.
+
 ![Python](https://img.shields.io/badge/python-3-blue)
 
 ## Overview
