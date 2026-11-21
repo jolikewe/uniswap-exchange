@@ -1,0 +1,3 @@
+# The notebook only uses the standard library (math, asyncio, time).
+# Jupyter is needed because the cells use top-level await.
+jupyter
