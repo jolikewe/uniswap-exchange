@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AMM arbitrage and LP analytics: size the trade, find the loop, test the LP</title>
+<meta name="description" content="Interactive quant toolkit for constant-product pools: closed-form optimal arbitrage net of fees, gas and flash-loan cost, Bellman-Ford cycle detection, and a Monte Carlo of liquidity-provider P&L versus holding.">
+<meta property="og:title" content="AMM arbitrage and LP analytics">
+<meta property="og:description" content="Closed-form arbitrage sizing net of gas and fees, cycle detection across pools, and LP fees versus loss-versus-rebalancing, all running in the browser.">
+<meta property="og:type" content="website">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@1,6..72,400;1,6..72,500&family=Schibsted+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+/*STYLE*/
+</style>
+</head>
+<body>
+<a class="skip" href="#tools">Skip to the tools</a>
+<header class="hero" id="top">
+  <div class="wrap">
+    <nav class="nav" aria-label="Sections">
+      <a class="mark" href="#top">amm toolkit</a>
+      <div class="navlinks">
+        <a href="#curve">Curve</a><a href="#arb">Arbitrage</a><a href="#cycles">Cycles</a><a href="#lp">LP lab</a><a href="#model">Assumptions</a>
+        <a class="btn ghost" href="https://github.com/jolikewe/uniswap-exchange">GitHub</a>
+      </div>
+    </nav>
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <h1><a href="#arb">Size the trade.</a><br><a href="#cycles">Find the loop.</a><br><a href="#lp">Test the LP.</a></h1>
+        <p class="purpose">Goal: find the arbitrage that pays most after swap fees, gas and flash-loan cost between constant-product pools, and show who is paid for it: the arbitrageur, the liquidity provider, or the validator.</p>
+        <ul class="writeup">
+          <li><b>What</b><span>Uniswap v2 maths in Python and NumPy, ported to this page and checked against it.</span></li>
+          <li><b>How</b><span>A closed-form trade size, Bellman-Ford over <i>&minus;log</i> rates for loops, and a Monte Carlo of LP versus HODL.</span></li>
+          <li><b>Proof</b><span>Closed form matches brute force to 1.5e-13, this page matches Python to <span id="maxrel">6e-10</span>, 38 tests pass.</span></li>
+        </ul>
+      </div>
+      <a class="live" href="#arb" aria-label="Open the arbitrage calculator" id="heroLive">
+        <div class="live-top"><span class="live-label">Two ETH/USDC pools, each $40M, 1.0% apart</span></div>
+        <div class="live-num"><span id="heroNet">$0</span><small>net per transaction, after fees and gas</small></div>
+        <svg id="heroSvg" role="img" aria-label="Profit against trade size, with the optimum marked"></svg>
+        <div class="live-foot"><span>trade <b id="heroSize">0</b> USDC</span><span>gas <b id="heroGas">$6</b></span><span>swap fees <b id="heroFees">$0</b></span></div>
+      </a>
+    </div>
+  </div>
+</header>
+
+<main id="tools">
+  <section class="wrap assume" aria-labelledby="assumeH">
+    <div>
+      <h2 id="assumeH">Costs of the arbitrageur</h2>
+      <p class="sub">Shared by the calculator, the cycle finder and the LP lab. Illustrative values, no live data.</p>
+    </div>
+    <div class="fields">
+      <label>ETH price ($)<input id="aEth" type="number" value="2000" min="1" step="any"></label>
+      <label>Gas used<input id="aUnits" type="number" value="150000" min="0" step="1000"></label>
+      <label>Gas price (gwei)<input id="aGwei" type="number" value="20" min="0" step="any"></label>
+      <label>Flash-loan fee (%)<input id="aFlash" type="number" value="0" min="0" step="0.01"></label>
+      <div class="gasout"><span>Gas per transaction</span><b id="aGasUsd">$6.00</b></div>
+    </div>
+  </section>
+
+  <section class="wrap tool" id="curve" aria-labelledby="curveH">
+    <div class="tool-head"><h2 id="curveH">Curve explorer</h2><p class="sub">Every trade moves along <i class="m">x&middot;y = k</i>. Drag the dot, or use the controls: bigger trades get worse prices, and the fee makes <i class="m">k</i> grow.</p></div>
+    <div class="card explorer">
+      <div class="plot" id="curvePlot"><svg id="curveSvg" role="img" aria-label="Constant-product curve with the trade marked"></svg></div>
+      <div class="panel">
+        <div class="seg" role="group" aria-label="Direction"><button class="chip" id="dirEth" aria-pressed="true">Sell ETH</button><button class="chip" id="dirUsd" aria-pressed="false">Sell USDC</button></div>
+        <label class="rng">Trade size <output id="szOut"></output><input id="sz" type="range" min="0" max="40" step="0.1" value="10" aria-label="Trade size as percent of the pool reserve"></label>
+        <div class="seg" role="group" aria-label="Fee tier"><button class="chip" data-fee="0.0005" aria-pressed="false">0.05%</button><button class="chip" data-fee="0.003" aria-pressed="true">0.30%</button><button class="chip" data-fee="0.01" aria-pressed="false">1.00%</button></div>
+        <dl class="kv" id="curveKv"></dl>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap tool" id="arb" aria-labelledby="arbH">
+    <div class="tool-head"><h2 id="arbH">Optimal arbitrage calculator</h2><p class="sub">Two pools quote ETH at different prices. Buy where it is cheap, sell where it is dear. The profit-maximising size has a closed form; this shows what is left after every cost.</p></div>
+    <div class="card calc">
+      <div class="calc-left">
+        <div class="headline" id="arbHead" aria-live="polite"></div>
+        <div class="plot"><svg id="arbSvg" role="img" aria-label="Net profit against trade size"></svg></div>
+        <label class="rng wide">Try your own size <output id="tryOut"></output><input id="tryS" type="range" min="0" max="1000" step="1" value="500" aria-label="Your trade size"></label>
+      </div>
+      <div class="calc-right">
+        <div class="presets" role="group" aria-label="Presets"><button class="chip" data-preset="mainnet">$40M pools, 1% apart</button><button class="chip" data-preset="breakeven">At break-even</button><button class="chip" data-preset="notebook">Notebook pools</button></div>
+        <div class="pools2">
+          <fieldset><legend>Pool A</legend><label><span id="lbT0a">ETH</span><input id="a0" type="number" step="any"></label><label><span id="lbT1a">USDC</span><input id="a1" type="number" step="any"></label><label>Fee %<input id="af" type="number" step="0.01" value="0.3"></label></fieldset>
+          <fieldset><legend>Pool B</legend><label><span id="lbT0b">ETH</span><input id="b0" type="number" step="any"></label><label><span id="lbT1b">USDC</span><input id="b1" type="number" step="any"></label><label>Fee %<input id="bf" type="number" step="0.01" value="0.3"></label></fieldset>
+        </div>
+        <label class="rng">Price gap, B above A <output id="gapOut"></output><input id="gap" type="range" min="-5" max="5" step="0.01" value="1" aria-label="Price gap in percent"></label>
+        <div class="meter" aria-hidden="true"><div class="m-band" id="mBand"></div><div class="m-gap" id="mGap"></div></div>
+        <p class="meter-note" id="meterNote"></p>
+        <table class="ledger" id="ledger"><caption class="sr">Where the money goes</caption></table>
+        <p class="recipe" id="recipe"></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap tool" id="cycles" aria-labelledby="cycH">
+    <div class="tool-head"><h2 id="cycH">Cycle finder</h2><p class="sub">Edit the pools, then find a profitable loop across tokens. Each pool is two edges weighted <i class="m">&minus;log(rate)</i>; a negative cycle is free money before costs.</p></div>
+    <div class="card cyc">
+      <div class="cyc-graph">
+        <svg id="cycSvg" role="img" aria-label="Token graph with the detected cycle highlighted"></svg>
+        <div class="cyc-actions">
+          <button class="btn solid" id="cFind">Find arbitrage</button>
+          <button class="btn" id="cExec" disabled>Execute trade</button>
+          <button class="btn" id="cFlat">Run until flat</button>
+          <button class="btn ghost" id="cMis">Add a mispricing</button>
+          <button class="btn ghost" id="cReset">Reset</button>
+        </div>
+        <div class="cyc-result" id="cycRes" aria-live="polite"></div>
+      </div>
+      <div class="cyc-table"><table id="poolTable"><thead><tr><th>Pool</th><th>Tokens</th><th>Reserve A</th><th>Reserve B</th><th>Fee %</th></tr></thead><tbody></tbody></table><div class="log" id="cycLog"></div></div>
+    </div>
+  </section>
+
+  <section class="wrap tool" id="lp" aria-labelledby="lpH">
+    <div class="tool-head"><h2 id="lpH">LP lab</h2><p class="sub">An LP in a v2 pool earns fees and loses value to arbitrageurs every time the market price moves. Pick the market and see 500 simulated futures of LP versus simply holding.</p></div>
+    <div class="lp">
+      <div class="card lp-main">
+        <div class="verdict" id="lpVerdict" aria-live="polite"></div>
+        <div class="plot"><svg id="fanSvg" role="img" aria-label="Fan chart of LP minus HODL profit over time"></svg></div>
+      </div>
+      <div class="card lp-ctrl">
+        <label class="rng">Volatility (per year) <output id="vOut"></output><input id="vol" type="range" min="10" max="150" step="1" value="80"></label>
+        <div class="lab">Fee tier</div><div class="seg" id="feeSeg" role="group" aria-label="Fee tier"><button class="chip" data-fee="0.0005" aria-pressed="false">0.05%</button><button class="chip" data-fee="0.003" aria-pressed="true">0.30%</button><button class="chip" data-fee="0.01" aria-pressed="false">1.00%</button></div>
+        <label class="rng">Volume, share of pool per day <output id="tOut"></output><input id="turn" type="range" min="0" max="1000" step="1" value="560" aria-label="Daily volume as share of pool value (log scale)"></label>
+        <label class="rng">Horizon <output id="hOut"></output><input id="hor" type="range" min="7" max="365" step="1" value="90"></label>
+        <div class="fields two"><label>Pool size ($)<input id="tvl" type="number" value="40000000" min="1000" step="any"></label><label>Your position ($)<input id="pos" type="number" value="100000" min="1" step="any"></label></div>
+        <p class="hint" id="beNote"></p>
+      </div>
+      <div class="card lp-earn"><h3>Who earns what</h3><p class="sub s">Mean over the paths, on your position over the horizon.</p><div id="earn"></div></div>
+      <div class="card lp-il"><h3>Impermanent loss</h3><p class="sub s">Position value versus holding, by price move.</p><div class="plot"><svg id="ilSvg" role="img" aria-label="Impermanent loss against price ratio"></svg></div>
+        <label class="rng">Concentrated range (v3) <output id="rOut"></output><input id="rng" type="range" min="0" max="3" step="1" value="0" aria-label="Concentrated liquidity range"></label></div>
+    </div>
+  </section>
+
+  <section class="wrap model" id="model" aria-labelledby="modH">
+    <h2 id="modH">The maths, and what it leaves out</h2>
+    <div class="mathgrid">
+      <div class="card"><h3>Swap</h3><p>With fee <i class="m">f</i> and <i class="m">&gamma; = 1 &minus; f</i>:</p><p class="eq">out = x &middot; &gamma; &middot; R<sub>out</sub> / (R<sub>in</sub> + x &middot; &gamma;)</p><p>The whole input joins the reserve, so <i class="m">k</i> never falls.</p></div>
+      <div class="card"><h3>Optimal size</h3><p>A route of pools composes into <i class="m">a &rarr; Aa / (B + Ca)</i>. With a flash fee <i class="m">&phi;</i> and <i class="m">&lambda; = 1 + &phi;</i>:</p><p class="eq">a* = (&radic;(AB/&lambda;) &minus; B) / C<br>profit* = (&radic;A &minus; &radic;(&lambda;B))<sup>2</sup> / C</p><p>Gas is fixed, so it only shifts profit down.</p></div>
+      <div class="card"><h3>Who is paid</h3><p>With no fee, the arbitrageur's profit equals the LP's loss-versus-rebalancing:</p><p class="eq">E[LVR] = V<sub>0</sub>(1 &minus; e<sup>&minus;&sigma;&sup2;T/8</sup>)</p><p>Gas paid by arbitrageurs goes to validators and is part of the LP's loss, not the arbitrageur's gain.</p></div>
+    </div>
+    <div class="card limits">
+      <h3>Assumptions and limits</h3>
+      <ul>
+        <li><b>Illustrative pools.</b> Reserves and prices are inputs (default: two 10,000 ETH / 20,000,000 USDC pools at $2,000). Nothing is fetched live. USDC and DAI are treated as $1.</li>
+        <li><b>Costs.</b> Net profit = swap output &minus; input &minus; flash-loan fee &minus; gas. Gas is gas used &times; gas price &times; ETH price, and every attempt pays it.</li>
+        <li><b>Not modelled.</b> Competition from other searchers (priority fees and MEV auctions usually take much of the profit), other trades in the same block, price moves before inclusion, and Uniswap v3 ticks when sizing arbitrage (v3 appears only as an impermanent-loss range).</li>
+        <li><b>LP simulation.</b> The external price is geometric Brownian motion; arbitrageurs move the pool to the edge of the fee band after every step; uninformed volume is price-neutral and only pays the fee.</li>
+        <li><b>Cycles.</b> Sizing uses each pool once per loop; trades execute against the pools shown, one at a time.</li>
+      </ul>
+    </div>
+    <div class="card verify">
+      <h3>Checks that back the numbers</h3>
+      <table class="vt"><tbody>
+        <tr><td>Closed-form arbitrage vs brute force (297 random pool pairs)</td><td>max relative error 1.5e-13 (profit)</td></tr>
+        <tr><td>This page vs the Python package (deterministic functions)</td><td id="vJs">max relative error 6e-10 over 1,891 comparisons</td></tr>
+        <tr><td>Seeded Monte Carlo here vs NumPy (20,000 paths, 3 settings)</td><td>means and win rates within 1.3 standard errors</td></tr>
+        <tr><td>Simulated E[LVR] vs closed form (80% vol, one year, no fee)</td><td>0.07719 &plusmn; 0.00021 vs 0.07688</td></tr>
+        <tr><td>Original notebook, 10 DAI trade</td><td>29.233166 ETH in, profit 0.035127 ETH (reproduced)</td></tr>
+      </tbody></table>
+    </div>
+  </section>
+</main>
+<footer class="foot"><div class="wrap"><a class="btn solid" href="https://github.com/jolikewe/uniswap-exchange">View the code on GitHub</a><span>Jovi &middot; 2026</span></div></footer>
+<script>
+//CORE
+</script>
+<script>
+//UI
+</script>
+</body>
+</html>

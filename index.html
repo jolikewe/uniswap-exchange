@@ -1,0 +1,983 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AMM arbitrage and LP analytics: size the trade, find the loop, test the LP</title>
+<meta name="description" content="Interactive quant toolkit for constant-product pools: closed-form optimal arbitrage net of fees, gas and flash-loan cost, Bellman-Ford cycle detection, and a Monte Carlo of liquidity-provider P&L versus holding.">
+<meta property="og:title" content="AMM arbitrage and LP analytics">
+<meta property="og:description" content="Closed-form arbitrage sizing net of gas and fees, cycle detection across pools, and LP fees versus loss-versus-rebalancing, all running in the browser.">
+<meta property="og:type" content="website">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@1,6..72,400;1,6..72,500&family=Schibsted+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#EDF0F6; --card:#fff; --ink:#0E1A2E; --mute:#5A6579; --line:#D8DEEA; --soft:#F5F7FB;
+  --navy:#0E1A2E; --navy2:#16294A;
+  --eth:#4A3FE0; --usd:#E9962A; --mint:#0B9A77; --coral:#E4484E; --sky:#8FB4FF;
+  --sans:'Schibsted Grotesk',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --serif:'Newsreader',Georgia,'Times New Roman',serif;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:16px}
+body{margin:0;background:var(--paper);color:var(--ink);font:400 16px/1.55 var(--sans);-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums;overflow-x:hidden}
+a{color:inherit}
+.wrap{max-width:1200px;margin:0 auto;padding:0 24px}
+.skip{position:absolute;left:-999px;top:8px;background:#fff;padding:8px 12px;border-radius:8px;z-index:20}
+.skip:focus{left:8px}
+:focus-visible{outline:2px solid var(--eth);outline-offset:3px;border-radius:6px}
+.hero :focus-visible{outline-color:var(--sky)}
+.m{font-family:var(--serif);font-style:italic;font-size:1.06em}
+svg text{font-family:var(--sans);font-variant-numeric:tabular-nums}
+
+/* hero */
+.hero{background:var(--navy);color:#fff;position:relative;overflow:hidden;padding-bottom:64px}
+.hero::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background-image:linear-gradient(rgba(143,180,255,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(143,180,255,.07) 1px,transparent 1px);background-size:44px 44px;
+  mask-image:linear-gradient(180deg,#000 30%,transparent 100%);-webkit-mask-image:linear-gradient(180deg,#000 30%,transparent 100%)}
+.nav{display:flex;justify-content:space-between;align-items:center;padding:22px 0;position:relative}
+.mark{font-weight:800;font-size:18px;letter-spacing:-.01em;text-decoration:none}
+.navlinks{display:flex;gap:22px;align-items:center;font-size:15px}
+.navlinks a{text-decoration:none;color:#C5CFE6}
+.navlinks a:hover{color:#fff}
+.navlinks .btn{color:#fff}
+.hero-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);gap:56px;align-items:center;padding-top:30px;position:relative}
+h1{font-weight:800;font-size:clamp(44px,6.6vw,86px);line-height:.98;letter-spacing:-.035em;margin:0}
+h1 a{text-decoration:none;background:linear-gradient(currentColor,currentColor) 0 94%/0 .06em no-repeat;transition:background-size .3s}
+h1 a:hover{background-size:100% .06em}
+.purpose{font-size:clamp(17px,1.5vw,20px);line-height:1.5;color:#C9D3EA;max-width:52ch;margin:26px 0 22px}
+.writeup{list-style:none;margin:0;padding:0;display:grid;gap:10px;max-width:56ch}
+.writeup li{display:grid;grid-template-columns:54px 1fr;gap:14px;font-size:15px;color:#DDE4F5;padding-top:10px;border-top:1px solid rgba(255,255,255,.14)}
+.writeup b{color:var(--sky);font-weight:600}
+.live{display:block;text-decoration:none;background:linear-gradient(160deg,#1B2F55,#122241);border:1px solid rgba(143,180,255,.25);border-radius:22px;padding:22px 22px 16px;box-shadow:0 40px 80px -30px rgba(0,0,0,.6)}
+.live-label{font-size:14px;color:#AFBDDC}
+.live-num{margin:10px 0 2px;display:flex;flex-direction:column}
+.live-num span{font-size:clamp(46px,6vw,76px);font-weight:800;letter-spacing:-.04em;line-height:1;color:#5EE6BF}
+.live-num small{color:#AFBDDC;font-size:14px;margin-top:6px}
+#heroSvg{width:100%;height:190px;display:block;margin-top:6px}
+.live-foot{display:flex;gap:18px;flex-wrap:wrap;font-size:13.5px;color:#AFBDDC;border-top:1px solid rgba(255,255,255,.12);padding-top:12px}
+.live-foot b{color:#fff;font-weight:600}
+
+/* buttons, chips, inputs */
+.btn{display:inline-flex;align-items:center;justify-content:center;padding:9px 16px;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--ink);font:600 14px var(--sans);text-decoration:none;cursor:pointer;transition:background .15s,border-color .15s,transform .1s}
+.btn:hover{border-color:#aab4c8}
+.btn:active{transform:translateY(1px)}
+.btn.solid{background:var(--ink);color:#fff;border-color:var(--ink)}
+.btn.solid:hover{background:#1d3153}
+.btn.ghost{background:transparent}
+.hero .btn.ghost{border-color:rgba(255,255,255,.3)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.chip{padding:6px 13px;border-radius:999px;border:1px solid var(--line);background:#fff;font:500 14px var(--sans);cursor:pointer;color:var(--ink)}
+.chip:hover{border-color:#9aa6bd}
+.chip[aria-pressed=true]{background:var(--ink);color:#fff;border-color:var(--ink)}
+.seg,.presets{display:flex;gap:6px;flex-wrap:wrap}
+input[type=number]{width:100%;font:500 15px var(--sans);padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink);font-variant-numeric:tabular-nums}
+input[type=number]:focus{border-color:var(--eth)}
+label{display:block;font-size:13px;color:var(--mute);font-weight:500}
+label input[type=number]{margin-top:4px}
+.sr{position:absolute;left:-9999px}
+.rng{display:block;font-size:14px;color:var(--ink);font-weight:500}
+.rng output{float:right;font-weight:700;font-variant-numeric:tabular-nums}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:28px;background:transparent;margin:2px 0 0;display:block}
+input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:6px;background:linear-gradient(90deg,var(--eth) var(--p,50%),#D3DAE8 var(--p,50%))}
+input[type=range]::-moz-range-track{height:6px;border-radius:6px;background:#D3DAE8}
+input[type=range]::-moz-range-progress{height:6px;border-radius:6px;background:var(--eth)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;border-radius:50%;background:#fff;border:3px solid var(--eth);margin-top:-7px;box-shadow:0 2px 6px rgba(14,26,46,.25);cursor:grab}
+input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:#fff;border:3px solid var(--eth);cursor:grab}
+
+/* sections */
+section{padding:0}
+.assume{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,2fr);gap:28px;align-items:end;padding-top:44px;padding-bottom:6px}
+h2{font-size:clamp(28px,3.4vw,40px);font-weight:800;letter-spacing:-.03em;line-height:1.05;margin:0 0 8px}
+h3{font-size:18px;font-weight:700;letter-spacing:-.01em;margin:0 0 6px}
+.sub{color:var(--mute);margin:0;max-width:62ch;font-size:16px}
+.sub.s{font-size:14px;margin-bottom:10px}
+.fields{display:grid;grid-template-columns:repeat(4,1fr) auto;gap:12px;align-items:end}
+.fields.two{grid-template-columns:1fr 1fr;margin-top:6px}
+.gasout{padding:8px 14px;border-radius:10px;background:var(--ink);color:#fff;display:flex;flex-direction:column;font-size:12.5px;line-height:1.25}
+.gasout b{font-size:20px}
+.tool{padding-top:76px}
+.tool-head{margin-bottom:22px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px}
+.plot{padding:10px 8px 6px}
+.plot svg{width:100%;display:block}
+.hint{font-size:13.5px;color:var(--mute);margin:12px 0 0}
+
+/* explorer */
+.explorer{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(280px,1fr);overflow:hidden}
+.panel{padding:22px;border-left:1px solid var(--line);display:flex;flex-direction:column;gap:16px;background:var(--soft)}
+.kv{margin:0;display:grid;gap:0}
+.kv div{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid var(--line);font-size:14.5px}
+.kv dt{color:var(--mute)}
+.kv dd{margin:0;font-weight:700;text-align:right}
+.kv .bad{color:var(--coral)}
+.kv .good{color:var(--mint)}
+#curveSvg{touch-action:none;cursor:ew-resize}
+
+/* calculator */
+.calc{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(300px,1fr);overflow:hidden}
+.calc-left{padding:22px 20px 18px}
+.calc-right{padding:22px;border-left:1px solid var(--line);background:var(--soft);display:flex;flex-direction:column;gap:14px}
+.headline{font-size:clamp(26px,3vw,38px);font-weight:800;letter-spacing:-.03em;line-height:1.1}
+.headline small{display:block;font-size:15px;font-weight:500;letter-spacing:0;color:var(--mute);margin-top:6px}
+.headline.pos{color:var(--mint)}
+.headline.neg{color:var(--coral)}
+.pools2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+fieldset{border:1px solid var(--line);border-radius:12px;padding:8px 12px 12px;margin:0;display:grid;gap:8px;background:#fff;min-width:0}
+legend{font-weight:700;font-size:13px;padding:0 6px}
+.meter{position:relative;height:12px;border-radius:8px;background:linear-gradient(90deg,#E8ECF4,#E8ECF4);overflow:hidden;margin-top:-2px}
+.m-band{position:absolute;left:0;top:0;bottom:0;background:repeating-linear-gradient(135deg,#F3B8BA 0 5px,#F9D6D8 5px 10px)}
+.m-gap{position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--ink)}
+.meter-note{margin:-6px 0 0;font-size:13.5px;color:var(--mute)}
+.ledger{width:100%;border-collapse:collapse;font-size:14.5px}
+.ledger td{padding:6px 0;border-top:1px solid var(--line)}
+.ledger td:last-child{text-align:right;font-weight:600}
+.ledger tr.total td{border-top:2px solid var(--ink);font-weight:800;font-size:16px}
+.ledger .minus td:last-child{color:var(--coral)}
+.ledger .total.pos td:last-child{color:var(--mint)}
+.ledger .total.neg td:last-child{color:var(--coral)}
+.recipe{font-size:14px;color:var(--ink);margin:0;line-height:1.5}
+
+/* cycles */
+.cyc{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(300px,1fr);overflow:hidden}
+.cyc-graph{padding:14px 18px 20px}
+#cycSvg{width:100%;display:block}
+.cyc-actions{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 12px}
+.cyc-result{font-size:15px;min-height:96px}
+.cyc-result .big{font-size:22px;font-weight:800;letter-spacing:-.02em}
+.cyc-result .pos{color:var(--mint)}
+.cyc-result .neg{color:var(--coral)}
+.cyc-result ol{margin:8px 0 0;padding-left:20px;color:var(--mute);font-size:14px}
+.cyc-table{border-left:1px solid var(--line);background:var(--soft);padding:16px 14px;overflow-x:auto}
+#poolTable{width:100%;border-collapse:collapse;font-size:13.5px}
+#poolTable th{text-align:left;font-weight:600;color:var(--mute);padding:4px 4px 8px;font-size:12.5px}
+#poolTable td{padding:3px 3px;border-top:1px solid var(--line)}
+#poolTable input{width:100%;min-width:70px;font:500 13.5px var(--sans);padding:5px 6px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--ink)}
+#poolTable input:hover{border-color:var(--line)}
+#poolTable input:focus{border-color:var(--eth);background:#fff}
+#poolTable tr.hot td{background:rgba(228,72,78,.08)}
+#poolTable td:nth-child(2){white-space:nowrap;font-weight:600}
+.log{margin-top:12px;font-size:13.5px;color:var(--mute)}
+.log table{width:100%;border-collapse:collapse}
+.log td,.log th{padding:4px 4px;border-top:1px solid var(--line);text-align:left}
+.log td:last-child,.log th:last-child{text-align:right}
+
+/* lp lab */
+.lp{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(280px,1fr);gap:18px}
+.lp-main{padding:18px 18px 10px}
+.lp-ctrl{padding:20px;display:flex;flex-direction:column;gap:14px;align-self:start}
+.lp-earn,.lp-il{padding:18px 20px}
+.verdict{font-size:clamp(20px,2.2vw,27px);font-weight:800;letter-spacing:-.025em;line-height:1.15;margin-bottom:4px}
+.verdict small{display:block;font-size:14.5px;font-weight:500;letter-spacing:0;color:var(--mute);margin-top:6px}
+.verdict .pos{color:var(--mint)} .verdict .neg{color:var(--coral)}
+.lab{font-size:13px;color:var(--mute);font-weight:500;margin-bottom:-8px}
+.earn-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;margin:11px 0;font-size:14px}
+.earn-row .bar{grid-column:1/-1;height:9px;border-radius:5px;background:#E9EDF5;position:relative;overflow:hidden}
+.earn-row .bar i{position:absolute;left:0;top:0;bottom:0;border-radius:5px}
+.earn-row b{font-variant-numeric:tabular-nums}
+.earn-row span em{display:block;font-style:normal;font-size:12.5px;color:var(--mute)}
+
+/* model */
+.model{padding-top:84px;padding-bottom:70px}
+.mathgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:22px 0 16px}
+.mathgrid .card,.limits,.verify{padding:20px 22px}
+.mathgrid p,.limits li{font-size:15px;color:#2A3750}
+.eq{font-family:var(--serif);font-style:italic;font-size:19px;line-height:1.5;color:var(--ink)!important;background:var(--soft);padding:10px 12px;border-radius:10px;margin:10px 0}
+.limits{margin-bottom:16px}
+.limits ul{margin:8px 0 0;padding-left:20px;display:grid;gap:8px}
+.vt{width:100%;border-collapse:collapse;font-size:14.5px}
+.vt td{padding:9px 0;border-top:1px solid var(--line)}
+.vt td:last-child{text-align:right;font-weight:600}
+.foot{background:var(--navy);color:#B7C3DE;padding:30px 0}
+.foot .wrap{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+.foot .btn.solid{background:#fff;color:var(--ink);border-color:#fff}
+
+@media (max-width:1000px){
+  .hero-grid{grid-template-columns:1fr;gap:34px}
+  .explorer,.calc,.cyc,.lp{grid-template-columns:1fr}
+  .panel,.calc-right,.cyc-table{border-left:0;border-top:1px solid var(--line)}
+  .mathgrid{grid-template-columns:1fr}
+  .assume{grid-template-columns:1fr}
+  .fields{grid-template-columns:repeat(2,1fr)}
+  .navlinks a:not(.btn){display:none}
+}
+@media (max-width:560px){
+  .wrap{padding-left:16px;padding-right:16px}
+  .pools2{grid-template-columns:1fr}
+  .tool{padding-top:56px}
+  .writeup li{grid-template-columns:48px 1fr}
+}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+/* animated cycle */
+@keyframes flow{to{stroke-dashoffset:-24}}
+.flow{animation:flow 1s linear infinite}
+</style>
+</head>
+<body>
+<a class="skip" href="#tools">Skip to the tools</a>
+<header class="hero" id="top">
+  <div class="wrap">
+    <nav class="nav" aria-label="Sections">
+      <a class="mark" href="#top">amm toolkit</a>
+      <div class="navlinks">
+        <a href="#curve">Curve</a><a href="#arb">Arbitrage</a><a href="#cycles">Cycles</a><a href="#lp">LP lab</a><a href="#model">Assumptions</a>
+        <a class="btn ghost" href="https://github.com/jolikewe/uniswap-exchange">GitHub</a>
+      </div>
+    </nav>
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <h1><a href="#arb">Size the trade.</a><br><a href="#cycles">Find the loop.</a><br><a href="#lp">Test the LP.</a></h1>
+        <p class="purpose">Goal: find the arbitrage that pays most after swap fees, gas and flash-loan cost between constant-product pools, and show who is paid for it: the arbitrageur, the liquidity provider, or the validator.</p>
+        <ul class="writeup">
+          <li><b>What</b><span>Uniswap v2 maths in Python and NumPy, ported to this page and checked against it.</span></li>
+          <li><b>How</b><span>A closed-form trade size, Bellman-Ford over <i>&minus;log</i> rates for loops, and a Monte Carlo of LP versus HODL.</span></li>
+          <li><b>Proof</b><span>Closed form matches brute force to 1.5e-13, this page matches Python to <span id="maxrel">6e-10</span>, 38 tests pass.</span></li>
+        </ul>
+      </div>
+      <a class="live" href="#arb" aria-label="Open the arbitrage calculator" id="heroLive">
+        <div class="live-top"><span class="live-label">Two ETH/USDC pools, each $40M, 1.0% apart</span></div>
+        <div class="live-num"><span id="heroNet">$0</span><small>net per transaction, after fees and gas</small></div>
+        <svg id="heroSvg" role="img" aria-label="Profit against trade size, with the optimum marked"></svg>
+        <div class="live-foot"><span>trade <b id="heroSize">0</b> USDC</span><span>gas <b id="heroGas">$6</b></span><span>swap fees <b id="heroFees">$0</b></span></div>
+      </a>
+    </div>
+  </div>
+</header>
+
+<main id="tools">
+  <section class="wrap assume" aria-labelledby="assumeH">
+    <div>
+      <h2 id="assumeH">Costs of the arbitrageur</h2>
+      <p class="sub">Shared by the calculator, the cycle finder and the LP lab. Illustrative values, no live data.</p>
+    </div>
+    <div class="fields">
+      <label>ETH price ($)<input id="aEth" type="number" value="2000" min="1" step="any"></label>
+      <label>Gas used<input id="aUnits" type="number" value="150000" min="0" step="1000"></label>
+      <label>Gas price (gwei)<input id="aGwei" type="number" value="20" min="0" step="any"></label>
+      <label>Flash-loan fee (%)<input id="aFlash" type="number" value="0" min="0" step="0.01"></label>
+      <div class="gasout"><span>Gas per transaction</span><b id="aGasUsd">$6.00</b></div>
+    </div>
+  </section>
+
+  <section class="wrap tool" id="curve" aria-labelledby="curveH">
+    <div class="tool-head"><h2 id="curveH">Curve explorer</h2><p class="sub">Every trade moves along <i class="m">x&middot;y = k</i>. Drag the dot, or use the controls: bigger trades get worse prices, and the fee makes <i class="m">k</i> grow.</p></div>
+    <div class="card explorer">
+      <div class="plot" id="curvePlot"><svg id="curveSvg" role="img" aria-label="Constant-product curve with the trade marked"></svg></div>
+      <div class="panel">
+        <div class="seg" role="group" aria-label="Direction"><button class="chip" id="dirEth" aria-pressed="true">Sell ETH</button><button class="chip" id="dirUsd" aria-pressed="false">Sell USDC</button></div>
+        <label class="rng">Trade size <output id="szOut"></output><input id="sz" type="range" min="0" max="40" step="0.1" value="10" aria-label="Trade size as percent of the pool reserve"></label>
+        <div class="seg" role="group" aria-label="Fee tier"><button class="chip" data-fee="0.0005" aria-pressed="false">0.05%</button><button class="chip" data-fee="0.003" aria-pressed="true">0.30%</button><button class="chip" data-fee="0.01" aria-pressed="false">1.00%</button></div>
+        <dl class="kv" id="curveKv"></dl>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap tool" id="arb" aria-labelledby="arbH">
+    <div class="tool-head"><h2 id="arbH">Optimal arbitrage calculator</h2><p class="sub">Two pools quote ETH at different prices. Buy where it is cheap, sell where it is dear. The profit-maximising size has a closed form; this shows what is left after every cost.</p></div>
+    <div class="card calc">
+      <div class="calc-left">
+        <div class="headline" id="arbHead" aria-live="polite"></div>
+        <div class="plot"><svg id="arbSvg" role="img" aria-label="Net profit against trade size"></svg></div>
+        <label class="rng wide">Try your own size <output id="tryOut"></output><input id="tryS" type="range" min="0" max="1000" step="1" value="500" aria-label="Your trade size"></label>
+      </div>
+      <div class="calc-right">
+        <div class="presets" role="group" aria-label="Presets"><button class="chip" data-preset="mainnet">$40M pools, 1% apart</button><button class="chip" data-preset="breakeven">At break-even</button><button class="chip" data-preset="notebook">Notebook pools</button></div>
+        <div class="pools2">
+          <fieldset><legend>Pool A</legend><label><span id="lbT0a">ETH</span><input id="a0" type="number" step="any"></label><label><span id="lbT1a">USDC</span><input id="a1" type="number" step="any"></label><label>Fee %<input id="af" type="number" step="0.01" value="0.3"></label></fieldset>
+          <fieldset><legend>Pool B</legend><label><span id="lbT0b">ETH</span><input id="b0" type="number" step="any"></label><label><span id="lbT1b">USDC</span><input id="b1" type="number" step="any"></label><label>Fee %<input id="bf" type="number" step="0.01" value="0.3"></label></fieldset>
+        </div>
+        <label class="rng">Price gap, B above A <output id="gapOut"></output><input id="gap" type="range" min="-5" max="5" step="0.01" value="1" aria-label="Price gap in percent"></label>
+        <div class="meter" aria-hidden="true"><div class="m-band" id="mBand"></div><div class="m-gap" id="mGap"></div></div>
+        <p class="meter-note" id="meterNote"></p>
+        <table class="ledger" id="ledger"><caption class="sr">Where the money goes</caption></table>
+        <p class="recipe" id="recipe"></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap tool" id="cycles" aria-labelledby="cycH">
+    <div class="tool-head"><h2 id="cycH">Cycle finder</h2><p class="sub">Edit the pools, then find a profitable loop across tokens. Each pool is two edges weighted <i class="m">&minus;log(rate)</i>; a negative cycle is free money before costs.</p></div>
+    <div class="card cyc">
+      <div class="cyc-graph">
+        <svg id="cycSvg" role="img" aria-label="Token graph with the detected cycle highlighted"></svg>
+        <div class="cyc-actions">
+          <button class="btn solid" id="cFind">Find arbitrage</button>
+          <button class="btn" id="cExec" disabled>Execute trade</button>
+          <button class="btn" id="cFlat">Run until flat</button>
+          <button class="btn ghost" id="cMis">Add a mispricing</button>
+          <button class="btn ghost" id="cReset">Reset</button>
+        </div>
+        <div class="cyc-result" id="cycRes" aria-live="polite"></div>
+      </div>
+      <div class="cyc-table"><table id="poolTable"><thead><tr><th>Pool</th><th>Tokens</th><th>Reserve A</th><th>Reserve B</th><th>Fee %</th></tr></thead><tbody></tbody></table><div class="log" id="cycLog"></div></div>
+    </div>
+  </section>
+
+  <section class="wrap tool" id="lp" aria-labelledby="lpH">
+    <div class="tool-head"><h2 id="lpH">LP lab</h2><p class="sub">An LP in a v2 pool earns fees and loses value to arbitrageurs every time the market price moves. Pick the market and see 500 simulated futures of LP versus simply holding.</p></div>
+    <div class="lp">
+      <div class="card lp-main">
+        <div class="verdict" id="lpVerdict" aria-live="polite"></div>
+        <div class="plot"><svg id="fanSvg" role="img" aria-label="Fan chart of LP minus HODL profit over time"></svg></div>
+      </div>
+      <div class="card lp-ctrl">
+        <label class="rng">Volatility (per year) <output id="vOut"></output><input id="vol" type="range" min="10" max="150" step="1" value="80"></label>
+        <div class="lab">Fee tier</div><div class="seg" id="feeSeg" role="group" aria-label="Fee tier"><button class="chip" data-fee="0.0005" aria-pressed="false">0.05%</button><button class="chip" data-fee="0.003" aria-pressed="true">0.30%</button><button class="chip" data-fee="0.01" aria-pressed="false">1.00%</button></div>
+        <label class="rng">Volume, share of pool per day <output id="tOut"></output><input id="turn" type="range" min="0" max="1000" step="1" value="560" aria-label="Daily volume as share of pool value (log scale)"></label>
+        <label class="rng">Horizon <output id="hOut"></output><input id="hor" type="range" min="7" max="365" step="1" value="90"></label>
+        <div class="fields two"><label>Pool size ($)<input id="tvl" type="number" value="40000000" min="1000" step="any"></label><label>Your position ($)<input id="pos" type="number" value="100000" min="1" step="any"></label></div>
+        <p class="hint" id="beNote"></p>
+      </div>
+      <div class="card lp-earn"><h3>Who earns what</h3><p class="sub s">Mean over the paths, on your position over the horizon.</p><div id="earn"></div></div>
+      <div class="card lp-il"><h3>Impermanent loss</h3><p class="sub s">Position value versus holding, by price move.</p><div class="plot"><svg id="ilSvg" role="img" aria-label="Impermanent loss against price ratio"></svg></div>
+        <label class="rng">Concentrated range (v3) <output id="rOut"></output><input id="rng" type="range" min="0" max="3" step="1" value="0" aria-label="Concentrated liquidity range"></label></div>
+    </div>
+  </section>
+
+  <section class="wrap model" id="model" aria-labelledby="modH">
+    <h2 id="modH">The maths, and what it leaves out</h2>
+    <div class="mathgrid">
+      <div class="card"><h3>Swap</h3><p>With fee <i class="m">f</i> and <i class="m">&gamma; = 1 &minus; f</i>:</p><p class="eq">out = x &middot; &gamma; &middot; R<sub>out</sub> / (R<sub>in</sub> + x &middot; &gamma;)</p><p>The whole input joins the reserve, so <i class="m">k</i> never falls.</p></div>
+      <div class="card"><h3>Optimal size</h3><p>A route of pools composes into <i class="m">a &rarr; Aa / (B + Ca)</i>. With a flash fee <i class="m">&phi;</i> and <i class="m">&lambda; = 1 + &phi;</i>:</p><p class="eq">a* = (&radic;(AB/&lambda;) &minus; B) / C<br>profit* = (&radic;A &minus; &radic;(&lambda;B))<sup>2</sup> / C</p><p>Gas is fixed, so it only shifts profit down.</p></div>
+      <div class="card"><h3>Who is paid</h3><p>With no fee, the arbitrageur's profit equals the LP's loss-versus-rebalancing:</p><p class="eq">E[LVR] = V<sub>0</sub>(1 &minus; e<sup>&minus;&sigma;&sup2;T/8</sup>)</p><p>Gas paid by arbitrageurs goes to validators and is part of the LP's loss, not the arbitrageur's gain.</p></div>
+    </div>
+    <div class="card limits">
+      <h3>Assumptions and limits</h3>
+      <ul>
+        <li><b>Illustrative pools.</b> Reserves and prices are inputs (default: two 10,000 ETH / 20,000,000 USDC pools at $2,000). Nothing is fetched live. USDC and DAI are treated as $1.</li>
+        <li><b>Costs.</b> Net profit = swap output &minus; input &minus; flash-loan fee &minus; gas. Gas is gas used &times; gas price &times; ETH price, and every attempt pays it.</li>
+        <li><b>Not modelled.</b> Competition from other searchers (priority fees and MEV auctions usually take much of the profit), other trades in the same block, price moves before inclusion, and Uniswap v3 ticks when sizing arbitrage (v3 appears only as an impermanent-loss range).</li>
+        <li><b>LP simulation.</b> The external price is geometric Brownian motion; arbitrageurs move the pool to the edge of the fee band after every step; uninformed volume is price-neutral and only pays the fee.</li>
+        <li><b>Cycles.</b> Sizing uses each pool once per loop; trades execute against the pools shown, one at a time.</li>
+      </ul>
+    </div>
+    <div class="card verify">
+      <h3>Checks that back the numbers</h3>
+      <table class="vt"><tbody>
+        <tr><td>Closed-form arbitrage vs brute force (297 random pool pairs)</td><td>max relative error 1.5e-13 (profit)</td></tr>
+        <tr><td>This page vs the Python package (deterministic functions)</td><td id="vJs">max relative error 6e-10 over 1,891 comparisons</td></tr>
+        <tr><td>Seeded Monte Carlo here vs NumPy (20,000 paths, 3 settings)</td><td>means and win rates within 1.3 standard errors</td></tr>
+        <tr><td>Simulated E[LVR] vs closed form (80% vol, one year, no fee)</td><td>0.07719 &plusmn; 0.00021 vs 0.07688</td></tr>
+        <tr><td>Original notebook, 10 DAI trade</td><td>29.233166 ETH in, profit 0.035127 ETH (reproduced)</td></tr>
+      </tbody></table>
+    </div>
+  </section>
+</main>
+<footer class="foot"><div class="wrap"><a class="btn solid" href="https://github.com/jolikewe/uniswap-exchange">View the code on GitHub</a><span>Jovi &middot; 2026</span></div></footer>
+<script>
+// Port of the amm/ Python package (pool, arbitrage, cycles, lp, v3, legacy). Pure functions, no DOM.
+const DEFAULT_FEE = 0.003, DAYS_PER_YEAR = 365;
+
+/* ---------- pool (amm/pool.py) ---------- */
+function ammOut(xIn, rIn, rOut, fee = DEFAULT_FEE) { const g = 1 - fee; return xIn * g * rOut / (rIn + xIn * g); }
+function ammIn(xOut, rIn, rOut, fee = DEFAULT_FEE) { const g = 1 - fee; return rIn * xOut / (g * (rOut - xOut)); }
+function mkPool(token0, token1, reserve0, reserve1, fee = DEFAULT_FEE) { return { token0, token1, reserve0, reserve1, fee }; }
+const copyPool = p => ({ ...p });
+const poolK = p => p.reserve0 * p.reserve1;
+const poolPrice = p => p.reserve1 / p.reserve0;           // token1 per token0
+const poolOther = (p, t) => { if (t === p.token0) return p.token1; if (t === p.token1) return p.token0; throw new Error('token not in pool'); };
+function poolReserves(p, tIn) { poolOther(p, tIn); return tIn === p.token0 ? [p.reserve0, p.reserve1] : [p.reserve1, p.reserve0]; }
+function poolRate(p, tIn) { const [a, b] = poolReserves(p, tIn); return (1 - p.fee) * b / a; }
+function poolQuoteOut(p, tIn, x) { const [a, b] = poolReserves(p, tIn); return ammOut(x, a, b, p.fee); }
+function poolSwap(p, tIn, x) {
+  const out = poolQuoteOut(p, tIn, x);
+  if (tIn === p.token0) { p.reserve0 += x; p.reserve1 -= out; } else { p.reserve1 += x; p.reserve0 -= out; }
+  return out;
+}
+
+/* ---------- closed-form arbitrage (amm/arbitrage.py) ---------- */
+function mobiusCoeffs(hops) {            // hops: [rIn, rOut, gamma]
+  let A = 1, B = 1, C = 0;
+  for (const [rIn, rOut, g] of hops) { const alpha = g * rOut, beta = rIn, delta = g; [A, B, C] = [alpha * A, beta * B, beta * C + delta * A]; }
+  return [A, B, C];
+}
+const pathOutput = (a, A, B, C) => A * a / (B + C * a);
+function optimalInput(A, B, C, flashFee = 0) {   // maximises A a/(B+C a) - (1+flashFee) a
+  const lam = 1 + flashFee;
+  if (A <= lam * B) return [0, 0];
+  return [(Math.sqrt(A * B / lam) - B) / C, (Math.sqrt(A) - Math.sqrt(lam * B)) ** 2 / C];
+}
+function routeHops(first, second, start) {
+  const mid = poolOther(first, start), r1 = poolReserves(first, start), r2 = poolReserves(second, mid);
+  return [[r1[0], r1[1], 1 - first.fee], [r2[0], r2[1], 1 - second.fee]];
+}
+function simulateRoute(first, second, start, a) {
+  const mid = poolOther(first, start);
+  return poolQuoteOut(second, mid, poolQuoteOut(first, start, a)) - a;
+}
+// gas: {token: cost of the transaction in that token}; profit is NET of flash fee and gas
+function twoPoolArbitrage(p1, p2, gas = {}, flashFee = 0) {
+  let best = null, bestProfit = 0;
+  [[p1, p2], [p2, p1]].forEach(([first, second], i) => {
+    for (const start of [first.token0, first.token1]) {
+      const [a, net0] = optimalInput(...mobiusCoeffs(routeHops(first, second, start)), flashFee);
+      const g = gas[start] || 0, net = net0 - g;
+      if (a > 0 && net > bestProfit) {
+        const mid = poolQuoteOut(first, start, a), out = poolQuoteOut(second, poolOther(first, start), mid);
+        best = { startToken: start, buyPool: i, amountIn: a, amountMid: mid, amountOut: out, profit: net, priceGap: Math.abs(poolPrice(p1) / poolPrice(p2) - 1), grossProfit: out - a, flashCost: flashFee * a, gasCost: g };
+        bestProfit = net;
+      }
+    }
+  });
+  return best;
+}
+function breakevenMispricing(pool, gas = {}, flashFee = 0, fee2 = null, hi = 0.5) {
+  const twin = g => mkPool(pool.token0, pool.token1, pool.reserve0, pool.reserve1 * (1 + g), fee2 === null ? pool.fee : fee2);
+  const paid = g => twoPoolArbitrage(pool, twin(g), gas, flashFee) !== null;
+  if (!paid(hi)) return NaN;
+  let lo = 0, up = hi;
+  for (let i = 0; i < 100; i++) { const mid = (lo + up) / 2; if (paid(mid)) up = mid; else lo = mid; }
+  return up;
+}
+function profitCurve(first, second, start, amounts) {
+  const [A, B, C] = mobiusCoeffs(routeHops(first, second, start));
+  return amounts.map(a => pathOutput(a, A, B, C) - a);
+}
+function bruteForceOptimum(first, second, start, grid = 4001) {   // swap-based grid + golden section
+  const scale = poolReserves(first, start)[0], lo0 = Math.log(1e-9 * scale), hi0 = Math.log(1e4 * scale);
+  const xs = [0]; for (let i = 0; i < grid; i++) xs.push(Math.exp(lo0 + (hi0 - lo0) * i / (grid - 1)));
+  const f = a => simulateRoute(first, second, start, a);
+  let bi = 0, bv = -Infinity; xs.forEach((x, i) => { const v = f(x); if (v > bv) { bv = v; bi = i; } });
+  let lo = xs[Math.max(bi - 1, 0)], hi = xs[Math.min(bi + 1, xs.length - 1)];
+  const phi = (Math.sqrt(5) - 1) / 2; let c = hi - phi * (hi - lo), d = lo + phi * (hi - lo);
+  for (let i = 0; i < 200; i++) { if (f(c) > f(d)) { hi = d; d = c; c = hi - phi * (hi - lo); } else { lo = c; c = d; d = lo + phi * (hi - lo); } }
+  const a = (lo + hi) / 2; return [a, f(a)];
+}
+
+/* ---------- cycles (amm/cycles.py): edge = [poolIndex, tokenIn, tokenOut] ---------- */
+function buildEdges(pools) { const e = []; pools.forEach((p, i) => { e.push([i, p.token0, p.token1]); e.push([i, p.token1, p.token0]); }); return e; }
+const edgeWeight = (pools, e) => -Math.log(poolRate(pools[e[0]], e[1]));
+function findNegativeCycle(pools, tol = 1e-12) {
+  const edges = buildEdges(pools), tokens = [...new Set(pools.flatMap(p => [p.token0, p.token1]))].sort();
+  const dist = {}, pred = {}; tokens.forEach(t => { dist[t] = 0; pred[t] = null; });
+  let last = null, passes = 0;
+  for (let it = 0; it < tokens.length; it++) {
+    last = null; passes++;
+    for (const e of edges) {
+      const w = edgeWeight(pools, e);
+      if (dist[e[1]] + w < dist[e[2]] - tol) { dist[e[2]] = dist[e[1]] + w; pred[e[2]] = e; last = e[2]; }
+    }
+    if (last === null) { findNegativeCycle.passes = passes; return null; }
+  }
+  findNegativeCycle.passes = passes;
+  let node = last;
+  for (let i = 0; i < tokens.length; i++) node = pred[node][1];
+  const cycle = []; let cur = node;
+  for (;;) { const e = pred[cur]; cycle.push(e); cur = e[1]; if (cur === node) break; }
+  return cycle.reverse();
+}
+const cycleRate = (pools, cycle) => cycle.reduce((m, [i, t]) => m * poolRate(pools[i], t), 1);
+function rotateCycle(cycle, start) { const k = cycle.findIndex(e => e[1] === start); return cycle.slice(k).concat(cycle.slice(0, k)); }
+function sizeCycle(pools, cycle, startToken = null, gas = {}, flashFee = 0) {
+  if (startToken !== null) cycle = rotateCycle(cycle, startToken);
+  const hops = cycle.map(([i, t]) => { const [a, b] = poolReserves(pools[i], t); return [a, b, 1 - pools[i].fee]; });
+  const [A, B, C] = mobiusCoeffs(hops), [a, net] = optimalInput(A, B, C, flashFee);
+  const g = a > 0 ? (gas[cycle[0][1]] || 0) : 0, gross = a > 0 ? A * a / (B + C * a) - a : 0;
+  return { cycle, startToken: cycle[0][1], amountIn: a, amountOut: a + gross, profit: a > 0 ? net - g : 0, rate: cycleRate(pools, cycle), grossProfit: gross, flashCost: flashFee * a, gasCost: g };
+}
+function executeCycle(pools, trade) { let amt = trade.amountIn; const legs = []; for (const [i, t, u] of trade.cycle) { const out = poolSwap(pools[i], t, amt); legs.push({ pool: i, tIn: t, tOut: u, amtIn: amt, amtOut: out }); amt = out; } trade.legs = legs; return amt; }
+function arbitrageUntilFlat(pools, maxIter = 100, minProfit = 1e-12, gas = {}, flashFee = 0) {
+  const work = pools.map(copyPool), trades = [];
+  for (let n = 0; n < maxIter; n++) {
+    const cyc = findNegativeCycle(work);
+    if (cyc === null || new Set(cyc.map(e => e[0])).size < cyc.length) break;
+    const tr = sizeCycle(work, cyc, null, gas, flashFee);
+    if (tr.profit <= minProfit) break;
+    executeCycle(work, tr); trades.push(tr);
+  }
+  return [trades, work];
+}
+
+/* ---------- LP analytics (amm/lp.py) ---------- */
+const impermanentLoss = r => 2 * Math.sqrt(r) / (1 + r) - 1;
+const expectedLvrFraction = (sigma, years) => 1 - Math.exp(-sigma * sigma * years / 8);
+const breakEvenTurnover = (sigma, fee) => sigma * sigma / 8 / DAYS_PER_YEAR / fee;
+function arbitrageToPrice(x, y, S, fee, gas = 0) {
+  const g = 1 - fee, k = x * y, p = y / x;
+  const buy = p < g * S, sell = p > S / g;
+  const dy = buy ? (Math.sqrt(g * k * S) - y) / g : 0, dx = sell ? (Math.sqrt(g * k / S) - x) / g : 0;
+  const xn = buy ? k / (y + g * dy) : sell ? x + dx : x, yn = buy ? y + dy : sell ? k / (x + g * dx) : y;
+  let profit = (x - xn) * S + (y - yn);
+  if (gas > 0) { if (profit <= gas) return [x, y, 0]; profit -= gas; }
+  return [xn, yn, profit];
+}
+// seeded generator: mulberry32 + Box-Muller
+function makeNormal(seed) {
+  let s = seed >>> 0, spare = null;
+  const u = () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  return () => { if (spare !== null) { const v = spare; spare = null; return v; } let a = 0; while (a === 0) a = u(); const b = u(), r = Math.sqrt(-2 * Math.log(a)); spare = r * Math.sin(2 * Math.PI * b); return r * Math.cos(2 * Math.PI * b); };
+}
+// LP Monte Carlo. Z: optional [path][step] normals. recordAt: step indices whose `net` is kept for all paths.
+function simulateLP({ sigma, fee = 0.003, turnover = 0, days = 30, stepsPerDay = 24, nPaths = 1000, seed = 0, mu = 0, S0 = 1, V0 = 1, Z = null, recordAt = [], gas = 0 }) {
+  const n = Math.round(days * stepsPerDay), dtDays = 1 / stepsPerDay, dt = dtDays / DAYS_PER_YEAR;
+  if (Z) nPaths = Z.length;
+  const drift = (mu - 0.5 * sigma * sigma) * dt, vol = sigma * Math.sqrt(dt), rnd = Z ? null : makeNormal(seed);
+  const out = { net: new Float64Array(nPaths), il: new Float64Array(nPaths), fees: new Float64Array(nPaths), lvr: new Float64Array(nPaths), S: new Float64Array(nPaths), arb: new Float64Array(nPaths), rec: recordAt.map(() => new Float64Array(nPaths)) };
+  const recIdx = new Map(recAtMap(recordAt));
+  function recAtMap(a) { return a.map((s, j) => [s, j]); }
+  for (let p = 0; p < nPaths; p++) {
+    let x = V0 / (2 * S0), y = V0 / 2, S = S0, w = V0, fees = 0, pool = V0, hodl = V0, arb = 0;
+    if (recIdx.has(0)) out.rec[recIdx.get(0)][p] = 0;
+    // running cumulative sum of the log-increments, as numpy cumsum does
+    let logS = 0;
+    for (let i = 1; i <= n; i++) {
+      logS += drift + vol * (Z ? Z[p][i - 1] : rnd());
+      const Sn = S0 * Math.exp(logS);
+      w += x * (Sn - S);
+      S = Sn;
+      const [xn, yn, pr] = arbitrageToPrice(x, y, S, fee, gas); x = xn; y = yn; arb += pr;
+      pool = x * S + y;
+      fees += fee * turnover * dtDays * pool;
+      if (recIdx.has(i)) { hodl = V0 / 2 * (S / S0 + 1); out.rec[recIdx.get(i)][p] = (pool + fees - hodl) / V0; }
+    }
+    hodl = V0 / 2 * (S / S0 + 1);
+    out.net[p] = (pool + fees - hodl) / V0; out.il[p] = (pool - hodl) / V0; out.fees[p] = fees / V0; out.lvr[p] = (w - pool) / V0; out.S[p] = S; out.arb[p] = arb / V0;
+  }
+  return out;
+}
+function quantile(sorted, q) { const h = (sorted.length - 1) * q, lo = Math.floor(h), hi = Math.ceil(h); return sorted[lo] + (sorted[hi] - sorted[lo]) * (h - lo); }
+function meanSe(a) { const n = a.length; let m = 0; for (const v of a) m += v; m /= n; let s = 0; for (const v of a) s += (v - m) ** 2; return [m, Math.sqrt(s / (n - 1) / n)]; }
+function summarise(res) {
+  const [mNet, seNet] = meanSe(res.net), [mLvr, seLvr] = meanSe(res.lvr);
+  let win = 0; for (const v of res.net) if (v > 0) win++;
+  return { meanNet: mNet, seNet, pWin: win / res.net.length, meanIl: meanSe(res.il)[0], meanFees: meanSe(res.fees)[0], meanLvr: mLvr, seLvr };
+}
+
+/* ---------- Uniswap v3 range maths (amm/v3.py) ---------- */
+function v3Amounts(L, p, pa, pb) { const sa = Math.sqrt(pa), sb = Math.sqrt(pb), sp = Math.min(Math.max(Math.sqrt(p), sa), sb); return [L * (1 / sp - 1 / sb), L * (sp - sa)]; }
+function v3LiquidityFromValue(v0, p0, pa, pb) { const [x1, y1] = v3Amounts(1, p0, pa, pb); return v0 / (x1 * p0 + y1); }
+function v3IlVsHodl(p, p0, pa, pb) {
+  const L = v3LiquidityFromValue(1, p0, pa, pb), [x0, y0] = v3Amounts(L, p0, pa, pb), [x, y] = v3Amounts(L, p, pa, pb);
+  return (x * p + y) / (x0 * p + y0) - 1;
+}
+const v3ConcentrationFactor = (p0, pa, pb) => v3LiquidityFromValue(1, p0, pa, pb) / (1 / (2 * Math.sqrt(p0)));
+
+/* ---------- original notebook model (amm/legacy.py) ---------- */
+function mkNotebookPool(name, dai, eth) { const p = { name, dai, eth }; legacyRefresh(p); return p; }
+function legacyRefresh(p) { p.k = p.dai * p.eth; p.price = p.eth / p.dai; }
+const LEGACY_FEE = 1.003;
+function legacyPriceInput(p, outDai) { return (p.k / (p.dai - outDai) - p.eth) * LEGACY_FEE; }
+function legacyPriceOutput(p, inDai) { return p.eth - p.k / (inDai + p.dai); }
+function legacySwapEth(p, inEth) { p.dai -= p.dai - p.k / (inEth + p.eth); p.eth += inEth * LEGACY_FEE; legacyRefresh(p); }
+function legacyArbitrage(a, b, outDai) {
+  if (a.price === b.price) return null;
+  const [hi, lo] = a.price > b.price ? [a, b] : [b, a];
+  const req = legacyPriceInput(lo, outDai), rec = legacyPriceOutput(hi, outDai), profit = rec - req;
+  return profit > 0 ? [req, profit, lo.name] : null;
+}
+</script>
+<script>
+(function () {
+'use strict';
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+const COL = { ink: '#0E1A2E', mute: '#5A6579', line: '#D8DEEA', eth: '#4A3FE0', usd: '#E9962A', mint: '#0B9A77', coral: '#E4484E', sky: '#8FB4FF', grid: '#E6EAF2' };
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const fmt = (v, d = 2) => v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+const usd = (v, d = 2) => (v < 0 ? '-$' : '$') + fmt(Math.abs(v), d);
+const sig = (v, d = 4) => { const a = Math.abs(v); return fmt(v, a >= 1000 ? 0 : a >= 100 ? 1 : a >= 10 ? 2 : a >= 1 ? 3 : d); };
+const pct = (v, d = 2) => (v >= 0 ? '' : '-') + fmt(Math.abs(v) * 100, d) + '%';
+const spct = (v, d = 2) => (v >= 0 ? '+' : '-') + fmt(Math.abs(v) * 100, d) + '%';
+const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const lin = (d0, d1, r0, r1) => v => r0 + (v - d0) / (d1 - d0) * (r1 - r0);
+function niceTicks(lo, hi, n) {
+  const span = hi - lo, raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / mag;
+  const step = (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * mag, out = [];
+  for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + 1e-9; v += step) out.push(Math.abs(v) < step * 1e-9 ? 0 : v);
+  return out;
+}
+function setRange(el) { el.style.setProperty('--p', ((el.value - el.min) / (el.max - el.min) * 100) + '%'); }
+function onWidth(el, fn) {
+  let last = 0, raf = 0;
+  const go = () => { raf = 0; const w = Math.round(el.getBoundingClientRect().width); if (w > 0 && w !== last) { last = w; fn(w); } };
+  new ResizeObserver(() => { if (!raf) raf = requestAnimationFrame(go); }).observe(el); go();
+  return () => { last = 0; go(); };
+}
+function later(fn) { let t = 0; return () => { if (!t) t = requestAnimationFrame(() => { t = 0; fn(); }); }; }
+
+/* ---------------- assumptions ---------------- */
+const A = { ethUsd: 2000, units: 150000, gwei: 20, flash: 0 };
+const gasUsd = () => A.units * A.gwei * 1e-9 * A.ethUsd;
+const listeners = [];
+function readAssumptions() {
+  A.ethUsd = Math.max(1e-6, +$('#aEth').value || 0); A.units = Math.max(0, +$('#aUnits').value || 0); A.gwei = Math.max(0, +$('#aGwei').value || 0); A.flash = Math.max(0, +$('#aFlash').value || 0) / 100;
+  $('#aGasUsd').textContent = usd(gasUsd());
+}
+['#aEth', '#aUnits', '#aGwei', '#aFlash'].forEach(s => $(s).addEventListener('input', () => { readAssumptions(); listeners.forEach(f => f()); }));
+const STABLE = new Set(['USD', 'USDC', 'DAI', 'USDT']);
+const tokenUsdSimple = t => STABLE.has(t) ? 1 : t === 'ETH' ? A.ethUsd : 1;
+
+/* ---------------- profit chart (hero + calculator) ---------------- */
+function profitChart(svg, w, h, o) {
+  const m = o.dark ? { l: 8, r: 8, t: 14, b: 22 } : { l: 58, r: 16, t: 16, b: 46 };
+  const xmax = o.xmax, ys = o.ys, ymax = Math.max(...ys, o.optY || 0, 1e-12), ymin = Math.min(0, ...ys);
+  const yr = (ymax - ymin) * 0.12 || 1, y0 = ymin - (ymin < 0 ? yr : 0), y1 = ymax + yr;
+  const X = lin(0, xmax, m.l, w - m.r), Y = lin(y0, y1, h - m.b, m.t);
+  const ink = o.dark ? '#DDE4F5' : COL.ink, grid = o.dark ? 'rgba(255,255,255,.1)' : COL.grid, line = o.dark ? '#8FB4FF' : COL.eth;
+  let s = '';
+  if (!o.dark) {
+    for (const t of niceTicks(y0, y1, 5)) s += `<line x1="${m.l}" x2="${w - m.r}" y1="${Y(t)}" y2="${Y(t)}" stroke="${grid}"/><text x="${m.l - 8}" y="${Y(t) + 4}" text-anchor="end" font-size="12" fill="${COL.mute}">${o.yfmt(t)}</text>`;
+    for (const t of niceTicks(0, xmax, w < 520 ? 3 : 6)) s += `<text x="${X(t)}" y="${h - 26}" text-anchor="middle" font-size="12" fill="${COL.mute}">${o.xfmt(t)}</text>`;
+    s += `<text x="${(m.l + w - m.r) / 2}" y="${h - 6}" text-anchor="middle" font-size="12" fill="${COL.mute}">${o.xlabel}</text>`;
+  }
+  s += `<line x1="${m.l}" x2="${w - m.r}" y1="${Y(0)}" y2="${Y(0)}" stroke="${o.dark ? 'rgba(255,255,255,.35)' : COL.ink}" stroke-width="1"/>`;
+  const pts = o.xs.map((x, i) => [X(x), Y(ys[i])]), d = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join('');
+  s += `<path d="${d}L${pts[pts.length - 1][0]} ${Y(0)}L${pts[0][0]} ${Y(0)}Z" fill="${line}" opacity="${o.dark ? .16 : .1}"/><path d="${d}" fill="none" stroke="${line}" stroke-width="${o.dark ? 2.5 : 2.6}" stroke-linejoin="round"/>`;
+  if (o.optX > 0) {
+    const ox = X(o.optX), oy = Y(o.optY);
+    s += `<line x1="${ox}" x2="${ox}" y1="${oy}" y2="${Y(0)}" stroke="${COL.mint}" stroke-dasharray="3 4"/><circle cx="${ox}" cy="${oy}" r="7" fill="${o.dark ? '#5EE6BF' : COL.mint}" stroke="${o.dark ? '#122241' : '#fff'}" stroke-width="3"/>`;
+    if (!o.dark) { const right = ox < w * .6; s += `<text x="${ox + (right ? 12 : -12)}" y="${oy - 10}" text-anchor="${right ? 'start' : 'end'}" font-size="13" font-weight="700" fill="${COL.mint}">best size ${o.optLabel}</text>`; }
+  }
+  if (o.markX != null) { const mx = X(o.markX), my = Y(o.markY); s += `<line x1="${mx}" x2="${mx}" y1="${Y(0)}" y2="${my}" stroke="${COL.usd}" stroke-width="2"/><circle cx="${mx}" cy="${my}" r="6" fill="${COL.usd}" stroke="#fff" stroke-width="2.5"/>`; }
+  if (o.sweepX != null) { const sx = X(o.sweepX), sy = Y(o.sweepY); s += `<circle cx="${sx}" cy="${sy}" r="7" fill="#fff" stroke="#5EE6BF" stroke-width="3"/>`; }
+  if (o.dark) s += `<text x="${m.l}" y="${h - 4}" font-size="12" fill="#8FA0C4">small trade</text><text x="${w - m.r}" y="${h - 4}" text-anchor="end" font-size="12" fill="#8FA0C4">large trade: price moves against you</text>`;
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`); svg.setAttribute('height', h); svg.innerHTML = s;
+}
+
+/* ---------------- shared arbitrage scenario ---------------- */
+function gasMapFor(t0, t1, toy) { if (toy) return {}; const g = gasUsd(); return { [t0]: g / tokenUsdSimple(t0), [t1]: g / tokenUsdSimple(t1) }; }
+function bestRoute(pA, pB) {
+  let best = null;
+  [[pA, pB], [pB, pA]].forEach(([first, second], i) => { for (const start of [first.token0, first.token1]) { const [a, b, c] = mobiusCoeffs(routeHops(first, second, start)); const q = a / b; if (!best || q > best.q) best = { first, second, start, q, buyPool: i, A: a, B: b, C: c }; } });
+  return best;
+}
+function curveFor(pA, pB, r, gas, flash, n = 120) {
+  const rt = r ? { first: r.buyPool === 0 ? pA : pB, second: r.buyPool === 0 ? pB : pA, start: r.startToken } : bestRoute(pA, pB);
+  const [A_, B_, C_] = mobiusCoeffs(routeHops(rt.first, rt.second, rt.start)), g = gas[rt.start] || 0;
+  const reserve = poolReserves(rt.first, rt.start)[0], xmax = r ? Math.max(r.amountIn * 3, reserve * 1e-4) : reserve * 0.05;
+  const xs = [], ys = []; for (let i = 0; i <= n; i++) { const x = xmax * i / n; xs.push(x); ys.push(i === 0 ? -g : pathOutput(x, A_, B_, C_) - x - flash * x - g); }
+  return { xs, ys, xmax, rt, A_, B_, C_, g };
+}
+
+/* ---------------- hero ---------------- */
+const hero = { done: false, t0: 0 };
+function renderHero(progress = null) {
+  const pA = mkPool('ETH', 'USDC', 10000, 20e6), pB = mkPool('ETH', 'USDC', 10000, 20.2e6), gas = gasMapFor('ETH', 'USDC'), r = twoPoolArbitrage(pA, pB, gas, A.flash);
+  const f = x => x; const svg = $('#heroSvg'), w = Math.round(svg.getBoundingClientRect().width) || 480;
+  const c = curveFor(pA, pB, r, gas, A.flash), uf = c.rt.start === 'USDC' ? 1 : A.ethUsd;
+  const ys = c.ys.map(v => v * uf);
+  const p = progress === null ? 1 : progress, sx = r ? r.amountIn * p : 0;
+  const sy = r ? (pathOutput(sx, c.A_, c.B_, c.C_) - sx - A.flash * sx - c.g) * uf : 0;
+  profitChart(svg, w, 190, { dark: true, xs: c.xs, ys, xmax: c.xmax, optX: p >= 1 && r ? r.amountIn : 0, optY: r ? r.profit * uf : 0, sweepX: p < 1 && r ? sx : null, sweepY: sy });
+  const net = r ? sy : 0;
+  $('#heroNet').textContent = r ? usd(Math.max(net, 0)) : '$0.00';
+  $('#heroSize').textContent = r ? fmt(sx * (c.rt.start === 'USDC' ? 1 : A.ethUsd), 0) : '0';
+  $('#heroGas').textContent = usd(gasUsd());
+  $('#heroFees').textContent = r ? usd((r.amountIn * pA.fee * (r.startToken === 'USDC' ? 1 : A.ethUsd) + r.amountMid * pB.fee * (r.startToken === 'USDC' ? A.ethUsd : 1)) * p) : '$0';
+  if (!r) $('#heroNet').textContent = 'No trade';
+}
+function heroAnimate() {
+  if (REDUCED) { renderHero(); return; }
+  hero.running = true;
+  const t0 = performance.now(), dur = 1700;
+  const tick = now => { const t = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - t, 3); renderHero(e >= 1 ? 1 : e); if (t < 1) requestAnimationFrame(tick); else hero.running = false; };
+  requestAnimationFrame(tick);
+}
+
+/* ---------------- curve explorer ---------------- */
+const cv = { x0: 1000, y0: 2e6, dir: 'eth', pct: 10, fee: 0.003 };
+function curveState() {
+  const g = 1 - cv.fee, k = cv.x0 * cv.y0;
+  let dx = 0, dy = 0, xn = cv.x0, yn = cv.y0, pay, get, payTok, getTok;
+  if (cv.dir === 'eth') { dx = cv.x0 * cv.pct / 100; const out = ammOut(dx, cv.x0, cv.y0, cv.fee); xn = cv.x0 + dx; yn = cv.y0 - out; pay = dx; get = out; payTok = 'ETH'; getTok = 'USDC'; }
+  else { dy = cv.y0 * cv.pct / 100; const out = ammOut(dy, cv.y0, cv.x0, cv.fee); yn = cv.y0 + dy; xn = cv.x0 - out; pay = dy; get = out; payTok = 'USDC'; getTok = 'ETH'; }
+  const spot = cv.y0 / cv.x0, exec = cv.dir === 'eth' ? get / pay : pay / get;   // USDC per ETH
+  const ideal = cv.dir === 'eth' ? pay * spot : pay / spot;                          // output at the pre-trade spot price, no fee
+  const feeAmt = pay * cv.fee * (cv.dir === 'eth' ? spot : 1), impact = 1 - get / ideal;
+  return { k, xn, yn, pay, get, payTok, getTok, spot, exec, impact, feeAmt, kn: xn * yn, newSpot: yn / xn };
+}
+function renderCurve(w) {
+  const svg = $('#curveSvg'); w = w || Math.round($('#curvePlot').getBoundingClientRect().width) || 600;
+  const h = w < 520 ? 320 : 400, m = { l: 62, r: 18, t: 16, b: 42 }, st = curveState();
+  const X = lin(0.35 * cv.x0, 2.2 * cv.x0, m.l, w - m.r), Y = lin(0.3 * cv.y0, 2.6 * cv.y0, h - m.b, m.t);
+  const curvePath = k => { let d = ''; for (let i = 0; i <= 90; i++) { const x = (0.38 + (2.2 - 0.38) * i / 90) * cv.x0, y = k / x; if (y > 2.6 * cv.y0) continue; d += (d ? 'L' : 'M') + X(x).toFixed(1) + ' ' + Y(y).toFixed(1); } return d; };
+  let s = '';
+  for (const t of niceTicks(0.35 * cv.x0, 2.2 * cv.x0, w < 520 ? 4 : 6)) s += `<line x1="${X(t)}" x2="${X(t)}" y1="${m.t}" y2="${h - m.b}" stroke="${COL.grid}"/><text x="${X(t)}" y="${h - 22}" text-anchor="middle" font-size="12" fill="${COL.mute}">${fmt(t, 0)}</text>`;
+  for (const t of niceTicks(0.3 * cv.y0, 2.6 * cv.y0, 5)) s += `<line x1="${m.l}" x2="${w - m.r}" y1="${Y(t)}" y2="${Y(t)}" stroke="${COL.grid}"/><text x="${m.l - 8}" y="${Y(t) + 4}" text-anchor="end" font-size="12" fill="${COL.mute}">${(t / 1e6).toFixed(1)}M</text>`;
+  s += `<text x="${(m.l + w - m.r) / 2}" y="${h - 4}" text-anchor="middle" font-size="12.5" fill="${COL.mute}">ETH in the pool</text><text transform="translate(14 ${(m.t + h - m.b) / 2}) rotate(-90)" text-anchor="middle" font-size="12.5" fill="${COL.mute}">USDC in the pool</text>`;
+  s += `<path d="${curvePath(st.kn)}" fill="none" stroke="${COL.usd}" stroke-width="2" stroke-dasharray="6 5"/><path d="${curvePath(st.k)}" fill="none" stroke="${COL.eth}" stroke-width="3.2"/>`;
+  const px = X(cv.x0), py = Y(cv.y0), qx = X(st.xn), qy = Y(st.yn);
+  const tanY = cv.y0 - (cv.y0 / cv.x0) * (st.xn - cv.x0), ty = Y(tanY);
+  s += `<line x1="${px}" y1="${py}" x2="${qx}" y2="${ty}" stroke="${COL.ink}" stroke-width="1.4" stroke-dasharray="2 3"/>`;
+  if (Math.abs(ty - qy) > 3) s += `<line x1="${qx}" y1="${ty}" x2="${qx}" y2="${qy}" stroke="${COL.coral}" stroke-width="3"/>`;
+  s += `<circle cx="${px}" cy="${py}" r="6" fill="#fff" stroke="${COL.ink}" stroke-width="2.5"/><text x="${px + 10}" y="${py - 10}" font-size="12.5" fill="${COL.ink}" font-weight="600">price now $${fmt(st.spot, 0)}</text>`;
+  s += `<circle id="drag" cx="${qx}" cy="${qy}" r="9" fill="${COL.eth}" stroke="#fff" stroke-width="3" tabindex="0" role="slider" aria-label="Trade point on the curve" style="cursor:grab"/>`;
+  s += `<text x="${w - m.r - 4}" y="${m.t + 14}" text-anchor="end" font-size="12.5" fill="${COL.eth}" font-weight="600">pool curve x·y = k</text><text x="${w - m.r - 4}" y="${m.t + 30}" text-anchor="end" font-size="12.5" fill="${COL.coral}" font-weight="600">red: price impact</text>`;
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`); svg.setAttribute('height', h); svg.innerHTML = s;
+  svg._geom = { X, Y, m, w, h };
+  $('#szOut').textContent = cv.pct.toFixed(1) + '% of ' + (cv.dir === 'eth' ? 'ETH' : 'USDC') + ' reserve';
+  $('#sz').value = cv.pct; setRange($('#sz'));
+  const kv = [['You pay', `${sig(st.pay)} ${st.payTok}`], ['You receive', `${sig(st.get)} ${st.getTok}`], ['Execution price', `$${fmt(st.exec, 2)} per ETH`],
+    ['Price impact', `<span class="bad">${pct(st.impact, 2)}</span>`], ['Fee paid', `${usd(st.feeAmt, 2)} (${pct(cv.fee, 2)})`], ['Pool price after', `$${fmt(st.newSpot, 2)}`], ['k grew by', `<span class="good">${spct(st.kn / st.k - 1, 4)}</span>`]];
+  $('#curveKv').innerHTML = kv.map(([a, b]) => `<div><dt>${a}</dt><dd>${b}</dd></div>`).join('');
+}
+function initCurve() {
+  const svg = $('#curveSvg');
+  const fromPointer = e => {
+    const g = svg._geom, r = svg.getBoundingClientRect(), x = (e.clientX - r.left) * (g.w / r.width), xv = g.X.invert ? 0 : null;
+    const x0px = g.X(0.35 * cv.x0), x1px = g.X(2.2 * cv.x0), ex = 0.35 * cv.x0 + (x - x0px) / (x1px - x0px) * (2.2 * cv.x0 - 0.35 * cv.x0);
+    const gm = 1 - cv.fee, k = cv.x0 * cv.y0;
+    if (ex >= cv.x0) { cv.dir = 'eth'; cv.pct = Math.min(40, (ex - cv.x0) / cv.x0 * 100); }
+    else { cv.dir = 'usd'; const xx = Math.max(ex, 0.38 * cv.x0); cv.pct = Math.min(40, (k / xx - cv.y0) / gm / cv.y0 * 100); }
+    syncDir(); renderCurve();
+  };
+  let down = false;
+  svg.addEventListener('pointerdown', e => { down = true; svg.setPointerCapture(e.pointerId); fromPointer(e); });
+  svg.addEventListener('pointermove', e => { if (down) fromPointer(e); });
+  svg.addEventListener('pointerup', () => { down = false; });
+  svg.addEventListener('keydown', e => { if (e.target.id !== 'drag') return; const d = e.key === 'ArrowRight' || e.key === 'ArrowUp' ? 0.5 : e.key === 'ArrowLeft' || e.key === 'ArrowDown' ? -0.5 : 0; if (d) { e.preventDefault(); cv.pct = Math.max(0, Math.min(40, cv.pct + d)); renderCurve(); $('#drag').focus(); } });
+  $('#sz').addEventListener('input', e => { cv.pct = +e.target.value; renderCurve(); });
+  $('#dirEth').onclick = () => { cv.dir = 'eth'; syncDir(); renderCurve(); };
+  $('#dirUsd').onclick = () => { cv.dir = 'usd'; syncDir(); renderCurve(); };
+  $$('#curve [data-fee]').forEach(b => b.onclick = () => { cv.fee = +b.dataset.fee; $$('#curve [data-fee]').forEach(x => x.setAttribute('aria-pressed', x === b)); renderCurve(); });
+  function syncDir() { $('#dirEth').setAttribute('aria-pressed', cv.dir === 'eth'); $('#dirUsd').setAttribute('aria-pressed', cv.dir === 'usd'); }
+  onWidth($('#curvePlot'), w => renderCurve(w));
+}
+
+/* ---------------- arbitrage calculator ---------------- */
+const calc = { t0: 'ETH', t1: 'USDC', toy: false, tryFrac: 0.5, ready: false };
+const num = id => +$(id).value;
+function poolsFromInputs() {
+  return [mkPool(calc.t0, calc.t1, num('#a0'), num('#a1'), Math.max(0, num('#af')) / 100), mkPool(calc.t0, calc.t1, num('#b0'), num('#b1'), Math.max(0, num('#bf')) / 100)];
+}
+function setLabels() { for (const s of ['a', 'b']) { $('#lbT0' + s).textContent = calc.t0 + ' reserve'; $('#lbT1' + s).textContent = calc.t1 + ' reserve'; } }
+function applyGap() { const g = num('#gap') / 100; $('#b1').value = +(num('#b0') * (num('#a1') / num('#a0')) * (1 + g)).toPrecision(10); }
+function loadPreset(name) {
+  const set = (a0, a1, b0, b1, af, bf) => { $('#a0').value = a0; $('#a1').value = a1; $('#b0').value = b0; $('#b1').value = b1; $('#af').value = af; $('#bf').value = bf; };
+  calc.toy = false; calc.t0 = 'ETH'; calc.t1 = 'USDC';
+  if (name === 'notebook') { calc.toy = true; calc.t0 = 'DAI'; calc.t1 = 'ETH'; set(400, 1200, 2000, 5800, 0.3, 0.3); }
+  else { set(10000, 20000000, 10000, 20200000, 0.3, 0.3); if (name === 'breakeven') { const pA = poolsFromInputs()[0], gap = breakevenGap(pA, poolsFromInputs()[1], gasMapFor('ETH', 'USDC'), A.flash, 1); $('#b1').value = +(10000 * 2000 * (1 + gap * 1.002)).toPrecision(10); } }
+  setLabels(); $$('#arb [data-preset]').forEach(b => b.setAttribute('aria-pressed', b.dataset.preset === name));
+  syncGapFromReserves(); renderArb();
+}
+function syncGapFromReserves() { const [a, b] = poolsFromInputs(); const g = poolPrice(b) / poolPrice(a) - 1; $('#gap').value = Math.max(-5, Math.min(5, +(g * 100).toFixed(2))); setRange($('#gap')); }
+// smallest |gap| (B price vs A price, given sign) for which the net profit is positive, bisection on the closed form
+function breakevenGap(pA, pB, gas, flash, sign) {
+  const at = h => twoPoolArbitrage(pA, mkPool(pB.token0, pB.token1, pB.reserve0, pB.reserve0 * poolPrice(pA) * (1 + sign * h), pB.fee), gas, flash) !== null;
+  if (!at(0.9)) return NaN; let lo = 0, hi = 0.9; for (let i = 0; i < 80; i++) { const mid = (lo + hi) / 2; if (at(mid)) hi = mid; else lo = mid; } return hi;
+}
+function renderArb(w) {
+  if (!calc.ready) return;
+  const [pA, pB] = poolsFromInputs(); if (![pA.reserve0, pA.reserve1, pB.reserve0, pB.reserve1].every(v => v > 0)) return;
+  const gas = gasMapFor(calc.t0, calc.t1, calc.toy), flash = calc.toy ? 0 : A.flash, r = twoPoolArbitrage(pA, pB, gas, flash);
+  const gapNow = poolPrice(pB) / poolPrice(pA) - 1, be = breakevenGap(pA, pB, gas, flash, gapNow >= 0 ? 1 : -1), be0 = breakevenGap(pA, pB, {}, 0, gapNow >= 0 ? 1 : -1);
+  const uf = t => calc.toy ? 1 : tokenUsdSimple(t), money = (v, t, d = 2) => calc.toy ? `${fmt(v, 6)} ${t}` : usd(v * uf(t), d), unit = calc.toy ? '' : '$';
+  const c = curveFor(pA, pB, r, gas, flash), st = c.rt.start;
+  // headline
+  const head = $('#arbHead');
+  if (r) { head.className = 'headline pos'; head.innerHTML = `${money(r.profit, r.startToken)} net per transaction<small>Send ${sig(r.amountIn)} ${r.startToken}. Gap ${pct(Math.abs(gapNow))}, break-even ${pct(be)}.</small>`; }
+  else { head.className = 'headline neg'; head.innerHTML = `No profit after costs<small>Gap ${pct(Math.abs(gapNow))} is below the break-even ${isNaN(be) ? 'of any size tested' : pct(be)}. ${be0 < Math.abs(gapNow) ? 'Fees alone would leave a profit; gas and flash fee take it.' : 'The two swap fees alone absorb the gap.'}</small>`; }
+  // meter
+  const scale = Math.max(0.05, Math.abs(gapNow) * 1.25, (be || 0) * 1.25);
+  $('#mBand').style.width = Math.min(100, (be || 0) / scale * 100) + '%'; $('#mGap').style.left = `calc(${Math.min(100, Math.abs(gapNow) / scale * 100)}% - 1.5px)`;
+  $('#meterNote').textContent = `Hatched: gap too small to pay (up to ${isNaN(be) ? '?' : pct(be)}). Marker: current gap ${pct(Math.abs(gapNow))}.`;
+  // ledger
+  const t = r ? r.startToken : st, gross = r ? r.grossProfit : 0, fc = r ? r.flashCost : 0, gc = r ? r.gasCost : (gas[st] || 0);
+  const swapFees = r ? (r.amountIn * (r.buyPool === 0 ? pA : pB).fee) * uf(r.startToken) + (r.amountMid * (r.buyPool === 0 ? pB : pA).fee) * uf(poolOther(pA, r.startToken)) : 0;
+  const row = (a, v, cls = '') => `<tr class="${cls}"><td>${a}</td><td>${v}</td></tr>`;
+  $('#ledger').innerHTML = `<caption class="sr">Where the money goes</caption>` + (r ? row('Gross profit, after swap fees', money(gross, t)) + row('Flash-loan fee', (fc > 0 ? '-' : '') + money(fc, t), fc > 0 ? 'minus' : '') + row('Gas', '-' + money(gc, t), 'minus') + row('Net profit', money(r.profit, t), 'total pos')
+    : row('Gross profit', 'none at any size') + row('Gas per attempt', calc.toy ? 'n/a (toy pools)' : '-' + usd(gasUsd()), 'minus') + row('Net profit', calc.toy ? '0' : usd(0), 'total neg')) +
+    (r ? `<tr><td colspan="2" style="font-size:13px;color:${COL.mute};border-top:0">Swap fees already paid inside the gross figure: ${calc.toy ? fmt(swapFees, 6) : usd(swapFees)}</td></tr>` : '');
+  $('#recipe').innerHTML = r ? `<b>Recipe:</b> put ${sig(r.amountIn)} ${r.startToken} into pool ${r.buyPool === 0 ? 'A' : 'B'}, receive ${sig(r.amountMid)} ${poolOther(pA, r.startToken)}, sell it in pool ${r.buyPool === 0 ? 'B' : 'A'} for ${sig(r.amountOut)} ${r.startToken}.` +
+    (calc.toy ? ` <span style="color:${COL.mute}">The original notebook, with its own fee convention and a fixed 10 DAI, reports 29.233166 ETH in and 0.035127 ETH profit; this is the optimum under v2 maths.</span>` : '') : '';
+  // chart
+  const wd = w || Math.round($('#arbSvg').parentNode.getBoundingClientRect().width) || 600, f = uf(st);
+  const tryX = c.xmax * calc.tryFrac, tryY = (pathOutput(tryX, c.A_, c.B_, c.C_) - tryX - flash * tryX - c.g);
+  profitChart($('#arbSvg'), wd, wd < 520 ? 290 : 400, { xs: c.xs, ys: c.ys.map(v => v * f), xmax: c.xmax, optX: r ? r.amountIn : 0, optY: r ? r.profit * f : 0, optLabel: r ? sig(r.amountIn) + ' ' + st : '', markX: tryX, markY: tryY * f,
+    xfmt: v => v === 0 ? '0' : v >= 1000 ? fmt(v / 1000, v % 1000 ? 1 : 0) + 'k' : fmt(v, v < 10 ? 2 : 0), yfmt: v => calc.toy ? fmt(v, 2) : usd(v, Math.abs(v) < 10 ? 1 : 0), xlabel: `${st} sent into the first pool`, });
+  $('#tryOut').textContent = `${sig(tryX)} ${st} → ${calc.toy ? fmt(tryY, 4) + ' ' + st : usd(tryY * f)}${r ? ` (${fmt(Math.max(0, tryY) / r.profit * 100, 0)}% of the best)` : ''}`;
+}
+function initArb() {
+  ['#a0', '#a1', '#b0', '#b1', '#af', '#bf'].forEach(id => $(id).addEventListener('input', () => { if (id === '#b1' || id === '#a1' || id === '#a0' || id === '#b0') syncGapFromReserves(); $$('#arb [data-preset]').forEach(b => b.setAttribute('aria-pressed', false)); renderArb(); }));
+  $('#gap').addEventListener('input', () => { applyGap(); setRange($('#gap')); $$('#arb [data-preset]').forEach(b => b.setAttribute('aria-pressed', false)); renderArb(); });
+  $('#tryS').addEventListener('input', e => { calc.tryFrac = e.target.value / 1000; setRange(e.target); renderArb(); });
+  $$('#arb [data-preset]').forEach(b => b.onclick = () => loadPreset(b.dataset.preset));
+  calc.ready = true; setRange($('#tryS'));
+  onWidth($('#arbSvg').parentNode, w => renderArb(w)); loadPreset('mainnet');
+  $('#gap').value = 1; setRange($('#gap'));
+}
+$('#gap').setAttribute('min', '-5');
+$('#gapOut').textContent = '';
+const gapOutUpdate = () => { $('#gapOut').textContent = (num('#gap') >= 0 ? '+' : '') + num('#gap').toFixed(2) + '%'; };
+$('#gap').addEventListener('input', gapOutUpdate); listeners.push(gapOutUpdate);
+
+/* ---------------- cycle finder ---------------- */
+const FAIR = { USD: 1, ETH: 2000, BTC: 40000, SOL: 100, ARB: 1, OP: 2 };
+function defaultMarket() {
+  const mk = (a, b, tvl, skew = 1, fee = 0.003) => mkPool(a, b, tvl / 2 / FAIR[a], tvl / 2 / FAIR[b] * skew, fee);
+  return [mk('USD', 'ETH', 4e6), mk('ETH', 'BTC', 3e6), mk('BTC', 'USD', 3e6), mk('ETH', 'SOL', 1e6, 1.04), mk('SOL', 'USD', 1e6), mk('ARB', 'USD', 5e5), mk('OP', 'ARB', 4e5), mk('OP', 'USD', 4e5, 1, 0.01)];
+}
+const cy = { pools: defaultMarket(), cur: null, log: [], busy: false, seed: 1, anim: 0, geom: null };
+function tokenPrices(pools) {
+  const toks = [...new Set(pools.flatMap(p => [p.token0, p.token1]))], px = {}, root = toks.find(t => STABLE.has(t));
+  if (!root) { toks.forEach(t => px[t] = 1); return px; }
+  px[root] = 1; let changed = true;
+  while (changed) { changed = false; for (const p of pools) { for (const [a, b, ra, rb] of [[p.token0, p.token1, p.reserve0, p.reserve1], [p.token1, p.token0, p.reserve1, p.reserve0]]) if (px[a] !== undefined && px[b] === undefined) { px[b] = px[a] * ra / rb; changed = true; } } }
+  toks.forEach(t => { if (px[t] === undefined) px[t] = 0; }); return px;
+}
+function cycGas(pools) { const px = tokenPrices(pools), g = {}; for (const t in px) g[t] = px[t] > 0 ? gasUsd() / px[t] : 0; return { px, g }; }
+function cycleSize(pools, cyc) {
+  const { px, g } = cycGas(pools), start = cyc.some(e => STABLE.has(e[1])) ? cyc.find(e => STABLE.has(e[1]))[1] : cyc[0][1];
+  const tr = sizeCycle(pools, cyc, start, g, A.flash); return { tr, px };
+}
+function renderTable() {
+  const tb = $('#poolTable tbody'); if (tb.children.length !== cy.pools.length) {
+    tb.innerHTML = cy.pools.map((p, i) => `<tr data-i="${i}"><td>${i + 1}</td><td></td><td><input type="number" step="any" data-k="reserve0" aria-label="Pool ${i + 1} first reserve"></td><td><input type="number" step="any" data-k="reserve1" aria-label="Pool ${i + 1} second reserve"></td><td><input type="number" step="0.01" data-k="fee" aria-label="Pool ${i + 1} fee percent"></td></tr>`).join('');
+    tb.addEventListener('input', e => { const i = +e.target.closest('tr').dataset.i, k = e.target.dataset.k, v = +e.target.value; if (!(v >= 0)) return; if (k === 'fee') cy.pools[i].fee = v / 100; else cy.pools[i][k] = v; cy.cur = null; cy.stop = true; renderCycles(false); });
+  }
+  [...tb.children].forEach((tr, i) => { const p = cy.pools[i]; tr.children[1].textContent = `${p.token0}/${p.token1}`;
+    const set = (k, v) => { const el = tr.querySelector(`[data-k=${k}]`); if (document.activeElement !== el) el.value = v; };
+    set('reserve0', +p.reserve0.toPrecision(8)); set('reserve1', +p.reserve1.toPrecision(8)); set('fee', +(p.fee * 100).toFixed(3));
+    tr.classList.toggle('hot', !!cy.cur && cy.cur.cycle.some(e => e[0] === i)); });
+}
+function renderCycles(redrawTable = true) {
+  const svg = $('#cycSvg'), w = Math.round(svg.getBoundingClientRect().width) || 600, h = w < 520 ? 340 : 440;
+  const toks = [...new Set(cy.pools.flatMap(p => [p.token0, p.token1]))], px = tokenPrices(cy.pools);
+  const cx = w / 2, cyy = h / 2, R = Math.min(w / 2 - 54, h / 2 - 58), pos = {};
+  toks.forEach((t, i) => { const a = -Math.PI / 2 + 2 * Math.PI * i / toks.length; pos[t] = [cx + R * Math.cos(a), cyy + R * Math.sin(a)]; });
+  const seen = {}, edgeP = {};
+  let s = '<defs><marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#0B9A77"/></marker></defs>';
+  cy.pools.forEach((p, i) => {
+    const key = [p.token0, p.token1].sort().join('|'); const n = seen[key] = (seen[key] || 0) + 1; const [x0, y0] = pos[p.token0], [x1, y1] = pos[p.token1];
+    const mx = (x0 + x1) / 2, my = (y0 + y1) / 2, dx = x1 - x0, dy = y1 - y0, L = Math.hypot(dx, dy) || 1, off = (n - 1) * 34 * (n % 2 ? -1 : 1) * 0 + (n === 1 ? 0 : (n % 2 ? -1 : 1) * Math.ceil((n - 1) / 2) * 38);
+    const qx = mx - dy / L * off * 2, qy = my + dx / L * off * 2; edgeP[i] = { x0, y0, x1, y1, qx, qy };
+    s += `<path d="M${x0} ${y0}Q${qx} ${qy} ${x1} ${y1}" fill="none" stroke="#B9C2D4" stroke-width="${1.2 + Math.log10(1 + p.reserve0 * px[p.token0] * 2 / 1e5)}" opacity=".9"/>`;
+    const lx = (x0 + 2 * qx + x1) / 4, ly = (y0 + 2 * qy + y1) / 4; s += `<g><circle cx="${lx}" cy="${ly}" r="9" fill="#fff" stroke="#B9C2D4"/><text x="${lx}" y="${ly + 3.8}" text-anchor="middle" font-size="10.5" font-weight="600" fill="${COL.mute}">${i + 1}</text></g>`;
+  });
+  const hot = new Set(); let route = [];
+  if (cy.cur) {
+    cy.cur.cycle.forEach(([i, a, b]) => { const e = edgeP[i], fwd = a === cy.pools[i].token0, p0 = fwd ? [e.x0, e.y0] : [e.x1, e.y1], p1 = fwd ? [e.x1, e.y1] : [e.x0, e.y0];
+      const sh = (p, q) => { const d = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1; return [p[0] + (q[0] - p[0]) / d * 24, p[1] + (q[1] - p[1]) / d * 24]; };
+      const ctl = [e.qx, e.qy], a0 = sh(p0, ctl), a1 = sh(p1, ctl); route.push([a0, ctl, a1]); hot.add(a); hot.add(b);
+      s += `<path d="M${a0[0]} ${a0[1]}Q${ctl[0]} ${ctl[1]} ${a1[0]} ${a1[1]}" fill="none" stroke="${COL.mint}" stroke-width="3.6" stroke-dasharray="9 6" marker-end="url(#arr)" class="flow"/>`; });
+  }
+  toks.forEach(t => { const [x, y] = pos[t], on = hot.has(t); s += `<circle cx="${x}" cy="${y}" r="25" fill="${on ? '#E9F8F3' : '#fff'}" stroke="${on ? COL.mint : COL.ink}" stroke-width="${on ? 3 : 2}"/><text x="${x}" y="${y + 4.5}" text-anchor="middle" font-size="13" font-weight="700" fill="${COL.ink}">${t}</text><text x="${x}" y="${y + (y > cyy ? 44 : -34)}" text-anchor="middle" font-size="11.5" fill="${COL.mute}">${px[t] > 0 ? (px[t] >= 1000 ? '$' + fmt(px[t], 0) : '$' + fmt(px[t], px[t] < 10 ? 2 : 0)) : ''}</text>`; });
+  s += `<circle id="coin" r="7" fill="${COL.usd}" stroke="#fff" stroke-width="2.5" display="none"/>`;
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`); svg.setAttribute('height', h); svg.innerHTML = s; cy.route = route;
+  startCoin(); if (redrawTable !== false) renderTable(); else renderTable();
+}
+function startCoin() {
+  cancelAnimationFrame(cy.anim); const coin = $('#coin'); if (!coin || !cy.route.length || REDUCED) return; coin.setAttribute('display', 'block');
+  const q = (p, t) => { const u = 1 - t; return [u * u * p[0][0] + 2 * u * t * p[1][0] + t * t * p[2][0], u * u * p[0][1] + 2 * u * t * p[1][1] + t * t * p[2][1]]; };
+  const n = cy.route.length, t0 = performance.now(), per = 900;
+  const tick = now => { const c = $('#coin'); if (!c) return; const u = (Math.max(0, now - t0) / per) % n, i = Math.floor(u), pt = q(cy.route[i], u - i); c.setAttribute('cx', pt[0]); c.setAttribute('cy', pt[1]); cy.anim = requestAnimationFrame(tick); };
+  cy.anim = requestAnimationFrame(tick);
+}
+function describeCycle(cyc) { return cyc.map(e => e[1]).concat(cyc[0][1]).join(' → '); }
+function findAndShow() {
+  const cyc = findNegativeCycle(cy.pools), passes = findNegativeCycle.passes, box = $('#cycRes');
+  if (!cyc || new Set(cyc.map(e => e[0])).size < cyc.length) { cy.cur = null; $('#cExec').disabled = true; box.innerHTML = `<div class="big">No arbitrage loop</div><p style="margin:6px 0 0;color:${COL.mute}">Bellman-Ford made ${passes} passes over ${cy.pools.length * 2} edges and found no negative cycle: every loop loses at least the swap fees.</p>`; renderCycles(); return null; }
+  const { tr, px } = cycleSize(cy.pools, cyc), f = px[tr.startToken] || 1; cy.cur = { cycle: tr.cycle, trade: tr, px };
+  const net = tr.profit * f, gross = tr.grossProfit * f, ok = net > 0;
+  const hops = []; { const w = cy.pools.map(copyPool); let amt = tr.amountIn; for (const [i, t, u] of tr.cycle) { const out = poolSwap(w[i], t, amt); hops.push(`Pool ${i + 1}: ${sig(amt)} ${t} → ${sig(out)} ${u}`); amt = out; } }
+  box.innerHTML = `<div class="big ${ok ? 'pos' : 'neg'}">${ok ? 'Net ' + usd(net) + ' per attempt' : 'Loop exists, not worth sending'}</div>
+    <div style="margin-top:4px">${describeCycle(tr.cycle)}, ×${tr.rate.toFixed(5)} per round trip at small size (${spct(tr.rate - 1)} before costs). ${ok ? '' : `Best case ${usd(gross)} is below gas of ${usd(tr.gasCost * f)}.`}</div>
+    <div style="color:${COL.mute};font-size:14px;margin-top:4px">Send ${sig(tr.amountIn)} ${tr.startToken}; gross ${usd(gross)}, flash fee ${usd(tr.flashCost * f)}, gas ${usd(tr.gasCost * f)}. Found in ${passes} Bellman-Ford passes.</div><ol>${hops.map(h => `<li>${h}</li>`).join('')}</ol>`;
+  $('#cExec').disabled = !ok; renderCycles(); return ok ? tr : null;
+}
+function executeCurrent() {
+  if (!cy.cur) return false; const tr = cy.cur.trade, f = cy.cur.px[tr.startToken] || 1; if (tr.profit <= 0) return false;
+  const path = describeCycle(tr.cycle); executeCycle(cy.pools, tr); cy.log.push({ n: cy.log.length + 1, path, net: tr.profit * f }); cy.cur = null; $('#cExec').disabled = true; renderLog(); renderCycles(); return true;
+}
+function renderLog() {
+  const el = $('#cycLog'); if (!cy.log.length) { el.innerHTML = ''; return; }
+  const tot = cy.log.reduce((a, b) => a + b.net, 0);
+  el.innerHTML = `<table><thead><tr><th>#</th><th>Loop</th><th>Net</th></tr></thead><tbody>${cy.log.map(l => `<tr><td>${l.n}</td><td>${l.path}</td><td>${usd(l.net)}</td></tr>`).join('')}<tr><td></td><td><b>Total</b></td><td><b>${usd(tot)}</b></td></tr></tbody></table>`;
+}
+async function runFlat() {
+  if (cy.busy) return; cy.busy = true; cy.stop = false; $('#cFlat').disabled = true;
+  for (let i = 0; i < 25 && !cy.stop; i++) { const tr = findAndShow(); if (!tr) break; await new Promise(r => setTimeout(r, REDUCED ? 0 : 1300)); if (cy.stop) break; executeCurrent(); await new Promise(r => setTimeout(r, REDUCED ? 0 : 500)); }
+  if (!cy.stop) { cy.cur = null; $('#cExec').disabled = true; renderCycles(); const tot = cy.log.reduce((s, l) => s + l.net, 0);
+    $('#cycRes').innerHTML = `<div class="big">Market is flat</div><p style="margin:6px 0 0;color:${COL.mute}">${cy.log.length} trade${cy.log.length === 1 ? '' : 's'} earned ${usd(tot)} net. No remaining loop pays more than the gas of ${usd(gasUsd())}.</p>`; }
+  cy.busy = false; $('#cFlat').disabled = false;
+}
+function initCycles() {
+  $('#cFind').onclick = () => { cy.stop = true; findAndShow(); };
+  $('#cExec').onclick = () => executeCurrent();
+  $('#cFlat').onclick = runFlat;
+  $('#cReset').onclick = () => { cy.stop = true; cy.pools = defaultMarket(); cy.cur = null; cy.log = []; $('#poolTable tbody').innerHTML = ''; renderLog(); $('#cycRes').innerHTML = ''; renderCycles(); };
+  $('#cMis').onclick = () => { cy.stop = true; const r = () => (cy.seed = (cy.seed * 1664525 + 1013904223) >>> 0) / 4294967296, i = Math.floor(r() * cy.pools.length), f = 1 + (0.02 + r() * 0.04) * (r() < .5 ? -1 : 1); cy.pools[i].reserve1 *= f; cy.cur = null; $('#cycRes').innerHTML = `<p style="color:${COL.mute};margin:6px 0">Pool ${i + 1} (${cy.pools[i].token0}/${cy.pools[i].token1}) moved by ${spct(f - 1, 1)}. Find arbitrage to see whether a loop opened.</p>`; renderCycles(); };
+  onWidth($('#cycSvg'), () => renderCycles());
+  listeners.push(() => { if (cy.cur) findAndShow(); });
+}
+
+/* ---------------- LP lab ---------------- */
+const lp = { fee: 0.003, res: null, rangeIdx: 0 };
+const RANGES = [null, 0.5, 0.2, 0.1], RANGE_TXT = ['Full range (v2)', '-33% / +50%', '-17% / +20%', '-9% / +10%'];
+const turnFromSlider = v => 0.001 * Math.pow(500, v / 1000);
+function lpParams() { return { sigma: num('#vol') / 100, fee: lp.fee, turnover: turnFromSlider(num('#turn')), days: num('#hor'), tvl: Math.max(1000, num('#tvl')), pos: Math.max(1, num('#pos')) }; }
+function runLP() {
+  const P = lpParams(), spd = P.days > 200 ? 2 : 4, n = Math.round(P.days * spd), K = 70, rec = []; for (let j = 0; j <= K; j++) rec.push(Math.round(n * j / K));
+  const t0 = performance.now(), res = simulateLP({ sigma: P.sigma, fee: P.fee, turnover: P.turnover, days: P.days, stepsPerDay: spd, nPaths: 500, seed: 12345, gas: gasUsd() / P.tvl, recordAt: rec });
+  const s = summarise(res), bands = rec.map((_, j) => { const a = Float64Array.from(res.rec[j]).sort(); return [quantile(a, .05), quantile(a, .25), quantile(a, .5), quantile(a, .75), quantile(a, .95)]; });
+  const sortedS = Float64Array.from(res.S).sort(); lp.res = { P, s, rec, bands, spd, n, meanArb: meanSe(res.arb)[0], sq: [quantile(sortedS, .05), quantile(sortedS, .5), quantile(sortedS, .95)], ms: performance.now() - t0 };
+  renderLP();
+}
+function renderLP() {
+  const R = lp.res; if (!R) return; const { P, s } = R;
+  $('#vOut').textContent = Math.round(P.sigma * 100) + '%'; $('#tOut').textContent = pct(P.turnover, P.turnover < 0.01 ? 2 : 1); $('#hOut').textContent = P.days + ' days';
+  ['#vol', '#turn', '#hor'].forEach(id => setRange($(id)));
+  const be = breakEvenTurnover(P.sigma, P.fee);
+  $('#beNote').innerHTML = `Rule of thumb: fee income matches the loss to arbitrageurs at about <b>${pct(be, be < 0.01 ? 2 : 1)} of the pool traded per day</b> (at ${Math.round(P.sigma * 100)}% volatility and ${pct(P.fee, 2)} fee). You chose ${pct(P.turnover, P.turnover < 0.01 ? 2 : 1)}.`;
+  const win = s.meanNet > 0, fees = s.meanFees, lvr = s.meanLvr;
+  $('#lpVerdict').innerHTML = `${win ? `<span class="pos">Fees win:</span> LP ${spct(s.meanNet, 2)} versus holding` : `<span class="neg">Loss wins:</span> LP ${spct(s.meanNet, 2)} versus holding`}<small>Mean after ${P.days} days over 500 paths (median ${spct(R.bands[R.bands.length - 1][2], 2)}). LP beats holding in ${Math.round(s.pWin * 100)}% of paths. Fee income is ${pct(fees)} of the position; loss to arbitrageurs ${pct(lvr)}.</small>`;
+  // fan chart
+  const svg = $('#fanSvg'), w = Math.round(svg.parentNode.getBoundingClientRect().width) || 700, h = w < 520 ? 300 : 380, m = { l: 68, r: 16, t: 14, b: 40 };
+  const lo = Math.min(...R.bands.map(b => b[0])), hi = Math.max(...R.bands.map(b => b[4])), pad = (hi - lo) * 0.08 || 0.01;
+  const X = lin(0, P.days, m.l, w - m.r), Y = lin((lo - pad) * 100, (hi + pad) * 100, h - m.b, m.t), days = R.rec.map(i => i / R.spd);
+  let g = ''; for (const t of niceTicks((lo - pad) * 100, (hi + pad) * 100, 6)) g += `<line x1="${m.l}" x2="${w - m.r}" y1="${Y(t)}" y2="${Y(t)}" stroke="${t === 0 ? COL.ink : COL.grid}"/><text x="${m.l - 8}" y="${Y(t) + 4}" text-anchor="end" font-size="12" fill="${COL.mute}">${t > 0 ? '+' : ''}${fmt(t, Math.abs(t) < 1 && t !== 0 ? 1 : 0)}%</text>`;
+  for (const t of niceTicks(0, P.days, w < 520 ? 4 : 7)) g += `<text x="${X(t)}" y="${h - 20}" text-anchor="middle" font-size="12" fill="${COL.mute}">${fmt(t, 0)}</text>`;
+  g += `<text x="${(m.l + w - m.r) / 2}" y="${h - 4}" text-anchor="middle" font-size="12.5" fill="${COL.mute}">days</text><text transform="translate(12 ${(m.t + h - m.b) / 2}) rotate(-90)" text-anchor="middle" font-size="12.5" fill="${COL.mute}">LP + fees minus holding, % of start</text>`;
+  const band = (a, b) => 'M' + days.map((d, j) => `${X(d).toFixed(1)} ${Y(R.bands[j][a] * 100).toFixed(1)}`).join('L') + 'L' + days.map((d, j) => j).reverse().map(j => `${X(days[j]).toFixed(1)} ${Y(R.bands[j][b] * 100).toFixed(1)}`).join('L') + 'Z';
+  g += `<path d="${band(0, 4)}" fill="${COL.eth}" opacity=".13"/><path d="${band(1, 3)}" fill="${COL.eth}" opacity=".24"/><path d="M${days.map((d, j) => `${X(d).toFixed(1)} ${Y(R.bands[j][2] * 100).toFixed(1)}`).join('L')}" fill="none" stroke="${COL.eth}" stroke-width="2.8"/>`;
+  const last = R.bands[R.bands.length - 1]; g += `<text x="${w - m.r - 4}" y="${Y(last[4] * 100) - 6}" text-anchor="end" font-size="12" fill="${COL.eth}">best 5%</text><text x="${w - m.r - 4}" y="${Y(last[0] * 100) + 15}" text-anchor="end" font-size="12" fill="${COL.eth}">worst 5%</text><text x="${w - m.r - 4}" y="${Y(last[2] * 100) - 8}" text-anchor="end" font-size="13" font-weight="700" fill="${COL.ink}">median ${spct(last[2], 2)}</text>`;
+  g += `<g id="fanHover" display="none"><line y1="${m.t}" y2="${h - m.b}" stroke="${COL.ink}" stroke-dasharray="3 3"/><text font-size="12.5" font-weight="600" fill="${COL.ink}"></text></g><rect x="${m.l}" y="${m.t}" width="${w - m.l - m.r}" height="${h - m.t - m.b}" fill="transparent" id="fanHit"/>`;
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`); svg.setAttribute('height', h); svg.innerHTML = g;
+  const hit = $('#fanHit'), hv = $('#fanHover'); hit.addEventListener('pointermove', e => { const r = svg.getBoundingClientRect(), x = (e.clientX - r.left) * w / r.width, d = (x - m.l) / (w - m.l - m.r) * P.days, j = Math.max(0, Math.min(days.length - 1, Math.round(d / P.days * (days.length - 1)))), b = R.bands[j];
+    hv.setAttribute('display', 'block'); const lx = X(days[j]); hv.querySelector('line').setAttribute('x1', lx); hv.querySelector('line').setAttribute('x2', lx); const t = hv.querySelector('text'); t.textContent = `day ${fmt(days[j], 0)}: median ${spct(b[2], 2)}, 5-95% ${spct(b[0], 1)} to ${spct(b[4], 1)}`; t.setAttribute('x', lx > w / 2 ? lx - 8 : lx + 8); t.setAttribute('text-anchor', lx > w / 2 ? 'end' : 'start'); t.setAttribute('y', m.t + 14); });
+  hit.addEventListener('pointerleave', () => hv.setAttribute('display', 'none'));
+  // earnings
+  const k = P.pos, feeD = s.meanFees * k, lvrD = s.meanLvr * k, arbD = R.meanArb * k, gasD = lvrD - arbD, netD = s.meanNet * k;
+  const rows = [['You earn in fees', 'from uninformed volume', feeD, COL.mint], ['You lose to arbitrageurs', 'loss versus rebalancing, after the fees they pay', -lvrD, COL.coral], ['Arbitrageurs keep', 'their net profit after gas', arbD, COL.usd], ['Validators receive', 'gas paid by arbitrageurs', gasD, COL.mute]];
+  const mx = Math.max(...rows.map(r => Math.abs(r[2])), 1e-9);
+  $('#earn').innerHTML = rows.map(([a, b, v, c]) => `<div class="earn-row"><span>${a}<em>${b}</em></span><b style="color:${v < 0 ? COL.coral : COL.ink}">${v < 0 ? '-' : '+'}${usd(Math.abs(v), 0)}</b><div class="bar"><i style="width:${Math.abs(v) / mx * 100}%;background:${c}"></i></div></div>`).join('') +
+    `<div class="earn-row" style="border-top:2px solid ${COL.ink};padding-top:8px"><span><b>You, versus just holding</b><em>fees plus impermanent loss</em></span><b style="color:${netD < 0 ? COL.coral : COL.mint}">${netD < 0 ? '-' : '+'}${usd(Math.abs(netD), 0)}</b></div>`;
+  renderIL();
+}
+function renderIL() {
+  const R = lp.res; if (!R) return; const svg = $('#ilSvg'), w = Math.round(svg.parentNode.getBoundingClientRect().width) || 360, h = 240, m = { l: 46, r: 10, t: 10, b: 34 };
+  const wv = RANGES[lp.rangeIdx], pa = wv ? 1 / (1 + wv) : null, pb = wv ? 1 + wv : null;
+  $('#rOut').textContent = RANGE_TXT[lp.rangeIdx] + (wv ? `, ${fmt(v3ConcentrationFactor(1, pa, pb), 1)}x capital efficiency` : ''); setRange($('#rng'));
+  const lx = Math.log2, X = lin(lx(0.25), lx(4), m.l, w - m.r), rs = []; for (let i = 0; i <= 120; i++) rs.push(Math.pow(2, lx(0.25) + (lx(4) - lx(0.25)) * i / 120));
+  const full = rs.map(r => impermanentLoss(r) * 100), rngv = wv ? rs.map(r => v3IlVsHodl(r, 1, pa, pb) * 100) : null, ymin = Math.min(...full, ...(rngv || [0]), -5), Y = lin(ymin * 1.05, 0, h - m.b, m.t + 4);
+  let s = ''; for (const t of niceTicks(ymin, 0, 4)) s += `<line x1="${m.l}" x2="${w - m.r}" y1="${Y(t)}" y2="${Y(t)}" stroke="${COL.grid}"/><text x="${m.l - 6}" y="${Y(t) + 4}" text-anchor="end" font-size="11.5" fill="${COL.mute}">${fmt(t, 0)}%</text>`;
+  for (const t of [0.25, 0.5, 1, 2, 4]) s += `<text x="${X(lx(t))}" y="${h - 14}" text-anchor="middle" font-size="11.5" fill="${COL.mute}">${t}×</text>`;
+  const [q5, q50, q95] = R.sq; s += `<rect x="${X(lx(Math.max(0.25, q5)))}" width="${Math.max(2, X(lx(Math.min(4, q95))) - X(lx(Math.max(0.25, q5))))}" y="${m.t}" height="${h - m.b - m.t}" fill="${COL.eth}" opacity=".08"/><line x1="${X(lx(Math.min(4, Math.max(.25, q50))))}" x2="${X(lx(Math.min(4, Math.max(.25, q50))))}" y1="${m.t}" y2="${h - m.b}" stroke="${COL.eth}" stroke-dasharray="3 3"/>`;
+  const path = arr => 'M' + arr.map((v, i) => `${X(lx(rs[i])).toFixed(1)} ${Y(v).toFixed(1)}`).join('L');
+  s += `<path d="${path(full)}" fill="none" stroke="${COL.eth}" stroke-width="2.6"/>` + (rngv ? `<path d="${path(rngv)}" fill="none" stroke="${COL.usd}" stroke-width="2.6"/>` : '');
+  s += `<text x="${(m.l + w - m.r) / 2}" y="${h + 2}" text-anchor="middle" font-size="11" fill="${COL.mute}">end price ÷ start price (shaded: 5-95% of paths)</text>`;
+  svg.setAttribute('viewBox', `0 0 ${w} ${h + 6}`); svg.setAttribute('height', h + 6); svg.innerHTML = s;
+}
+function initLP() {
+  const go = later(runLP);
+  ['#vol', '#turn', '#hor', '#tvl', '#pos'].forEach(id => $(id).addEventListener('input', go));
+  $$('#feeSeg .chip').forEach(b => b.onclick = () => { lp.fee = +b.dataset.fee; $$('#feeSeg .chip').forEach(x => x.setAttribute('aria-pressed', x === b)); go(); });
+  $('#rng').addEventListener('input', e => { lp.rangeIdx = +e.target.value; renderIL(); });
+  onWidth($('#fanSvg').parentNode, () => renderLP());
+  listeners.push(go); go();
+}
+
+/* ---------------- boot ---------------- */
+readAssumptions();
+$('#turn').value = 629;
+listeners.push(() => { renderHero(); renderArb(); });
+initCurve(); initArb(); initCycles(); initLP();
+gapOutUpdate(); $('#gap').addEventListener('input', gapOutUpdate);
+renderCycles(); renderHero(REDUCED ? null : 0); findAndShow();
+onWidth($('#heroSvg'), () => { if (hero.done && !hero.running) renderHero(); });
+setTimeout(() => { hero.done = true; heroAnimate(); }, 250);
+})();
+</script>
+</body>
+</html>
